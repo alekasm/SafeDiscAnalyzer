@@ -30,8 +30,130 @@ void txt2_drvmgtPatch(SectionInfo& info)
 
 
   //sub_40F780 drive check needs to return 1 for true
-
 }
+
+
+//Contains three separate debugging checks.
+//1. 4242A9 they decrypt "IsDebuggerPresent" and call from Kernel32.dll
+//2. Uses TIB fs:18 + 0x30 = PEB + 2 = BeingDebugged
+//3. Uses DeviceIoControl to communicate with driver  \\\\.\\Secdrv
+
+//These catches will then determine how they manipulate arg_0
+//If SecdrvVerification fails, arg_0 & 0x2D325697.
+//If SecdrvVerification passes, arg_0 = var_C0
+
+//If BeingDebuggedPEB || IsDebuggerPresent, arg_0 & 0FD356997
+//If dwPlatformId != VER_PLATFORM_WIN32_NT, arg_0 & 1145373A
+//If A8_Counter > 0, arg_0 & 5185DADE
+
+//The Objective is arg_0 = var_C0, which is complicated inside of SecdrvVerification
+
+void text_CanOpenSecdrvPatch(SectionInfo& info)
+{
+  //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
+  //This really doesn't do much besides take in some message then return a bool.
+  size_t sectionOffset = 0x4147A3 - TEXT_SECTION;
+
+  memcpy(&info.data[sectionOffset],
+    "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
+    "\xC3",                 //ret
+    6);
+}
+
+void text_SecdrvProcessIoctlPatch(SectionInfo& info)
+{
+  //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
+  //This really doesn't do much besides take in some message then return a bool.
+  //The message passed to the ioctl is 0x42EC30
+  size_t sectionOffset = 0x414818 - TEXT_SECTION;
+
+  memcpy(&info.data[sectionOffset],
+    "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
+    "\xC3",                 //ret
+    6);
+}
+
+void text_SecdrvStatusMessagePatch(SectionInfo& info)
+{
+  //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
+  //This really doesn't do much besides take in some message then return a bool.
+  //The message passed to the ioctl is 0x42EC30
+  size_t sectionOffset = 0x414760 - TEXT_SECTION;
+
+  memcpy(&info.data[sectionOffset],
+    "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
+    "\xC3",                 //ret
+    6);
+}
+
+void text_TickCountLowPatch(SectionInfo& info)
+{
+  //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
+  //This really doesn't do much besides take in some message then return a bool.
+  //The message passed to the ioctl is 0x42EC30
+  
+
+  //This one is kind of clever, they use address 0x7FFE0000 which is always
+  //KUSER_SHARED_DATA even on 64-bit Windows. They retrieve TickCountLow in 
+  //function 0x4148F8. If the elapsed ticks is > 0xA, return 0.
+
+  //You can essentially bypass this by not debugging that function, this patch
+  //is provided to allow others to debug
+  
+  size_t sectionOffset = 0x4149DB - TEXT_SECTION;
+  memcpy(&info.data[sectionOffset],
+    "\xEB", //jbe -> jmp
+    1);
+}
+
+/*
+ProcessEnvironmentBlock
+Thread 5B0 TEB
+KUSER_SHARED_DATA = 7FFE0000
+GetRandomGeneration returns this value in shared data
+shared data inside of the TEB
+KUSER_SHARED_DATA
+*/
+
+
+void txt2_BeingDebuggedPEBPatch(SectionInfo& info)
+{
+  //Uses TIB fs:18 + 0x30 = PEB + 2 = BeingDebugged
+  size_t sectionOffset = 0x42436A - TXT2_SECTION;
+  memcpy(&info.data[sectionOffset],
+    "\x33\xC0"                 //xor eax, eax
+    "\x90\x90\x90\x90\x90"     //nop (5)
+    "\x90\x90\x90\x90\x90"     //nop (5)
+    "\x90",                    //nop
+    13);
+}
+
+void txt2_IsBeingDebuggedPatch(SectionInfo& info)
+{
+  //4242A9 they decrypt "IsDebuggerPresent" and call from Kernel32.dll
+  size_t sectionOffset = 0x4242D4 - TXT2_SECTION;
+  memcpy(&info.data[sectionOffset],
+    "\x33\xC0"                 //xor eax, eax
+    "\x90",                    //nop
+    3);
+}
+
+//42A9D8 = ReadProcessMemory
+//42A9F0 = WriteProcessMemory
+//42AA08 = VirtualProtect
+//42AA18 = CreateProcessA
+//42AA28 = CreateProcessW
+//42AA38 = GetStartupInfoA
+//42AA48 = GetStartupInfoW
+//42AA58 = GetSystemTime
+//42AA68 = TerminateProcess
+//42AA80 = Sleep
+
+//42A978 = ReadProcessMemory
+//42A9A0 = WriteProcessMemory
+//42A9B8 = VirtualProtect
+
+//42AB50 = IsDebuggerPresent
 
 void txt2_ProcessDebugPortPatch(SectionInfo& info)
 {
@@ -89,6 +211,18 @@ void txt2_ApplyInterruptDebugPatch(SectionInfo& info)
   info.data[sectionOffset + 1] = 0x90;
 }
 
+void text_DisableDecryption(SectionInfo& info)
+{
+  //We are using the already decrypted .text section which
+  //is dumped on CD failure
+  for (size_t i = 0x40E268; i < 0x40E288; ++i)
+  {
+    size_t sectionOffset = i - TEXT_SECTION;
+    info.data[sectionOffset] = 0x90;
+  }
+}
+
+
 void ApplyF18Patches(std::vector<SectionInfo>& sections)
 {
   const std::string text(".text");
@@ -97,13 +231,20 @@ void ApplyF18Patches(std::vector<SectionInfo>& sections)
   {
     if (text.compare(section.name) == 0)
     {
+      text_CanOpenSecdrvPatch(section);
+      text_SecdrvProcessIoctlPatch(section);
       text_ApplyCDCheckPatch(section);
+      text_SecdrvStatusMessagePatch(section);
+      text_TickCountLowPatch(section);
+      //text_DisableDecryption(section);
     }
     else if (txt2.compare(section.name) == 0)
     {
       txt2_ProcessDebugPortPatch(section);
       txt2_ApplyInterruptDebugPatch(section);
       txt2_drvmgtPatch(section);
+      txt2_IsBeingDebuggedPatch(section);
+      txt2_BeingDebuggedPEBPatch(section);
     }
   }
 }
