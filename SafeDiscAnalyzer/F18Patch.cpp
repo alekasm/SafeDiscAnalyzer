@@ -155,31 +155,60 @@ void txt2_IsBeingDebuggedPatch(SectionInfo& info)
 
 //42AB50 = IsDebuggerPresent
 
-void txt2_ProcessDebugPortPatch(SectionInfo& info)
+void txt2_NTQueryProcessInformationPatch(SectionInfo& info)
 {
   //Function: 0x4239DF
-  //SafeDiscError(0x04, 0x07, 0x10)
-  //This function has various strings that are decrypted
-  // 0x42AB80 = Encrypted Ntdll
-  // 0x42AB90 = Encrypted NtQueryInformationProcess
-  // 0x42AB00 = Encrypted Kernel32.dll
-  // 0x42AB40 = Encrypted CreateFileA
-  // 0x42AB10 = Encrypted \\\\.\\SICE (driver)
-  // 0x42AB30 = Encrypted \\\\.\\NTICE (driver)
   // 0x423C1B = CALL NtQueryInformationProcess
   //  - arg0:GetCurrentProcess()
   //  - arg1: 7, ProcessDebugPort
   //  - arg2: stack variable, out ProcessInformation
   //  - arg3: 4, ProcessInformationLength
   //  - arg4: 0, ReturnLength (optional)
-
-  //Patch:
-  //xor eax, eax
-  //ret
-
-  size_t sectionOffset = 0x422B40 - TXT2_SECTION;
-  memcpy(&info.data[sectionOffset], "\x31\xC0\xC3", 3);
+  // 
+  // 423C57 has checks for NTSTATUS and the return value for ProcessDebugPort
+  // ignore these values and just assign 0 to thhe stack variable
+  // 423C57: jmp 423C96
+  size_t sectionOffset = 0x423C57 - TXT2_SECTION;
+  memcpy(&info.data[sectionOffset],
+    "\xEB\x3D"                 //jmp 0x423C96
+    "\x90\x90\x90\x90\x90",     //nop (5), correction for debugging
+    7);
 }
+
+void txt2_SoftICEDebuggerCheck(SectionInfo& info)
+{
+  // 0x42AB10 = Encrypted \\\\.\\SICE (driver)
+  // 0x42AB30 = Encrypted \\\\.\\NTICE (driver)
+  
+  //Checks to see if SoftICE debugger is running. Not really necessary 
+  //to patch, but did so anyways. Takes the file handle result and stores 
+  //it onto a stack variable, then copied back into the function argument.
+  //You want this to be -1, ie CreateFile(\\\\.\\NTICE) fails.
+
+  size_t sectionOffset = 0x423DDF - TXT2_SECTION;
+  memcpy(&info.data[sectionOffset],
+    "\xB8\xFF\xFF\xFF\xFF"          //mov eax, 0xFFFFFFFF
+    "\x89\x85\x38\xFF\xFF\xFF"     //mov dword ptr ss:[ebp-C8], eax ; kept segment selector
+    "\x90\x90",                    //nop (2), correction for debugging
+    13);
+}
+
+//Function: 0x4239DF
+//SafeDiscError(0x04, 0x07, 0x10)
+//This function has various strings that are decrypted
+// 0x42AB80 = Encrypted Ntdll
+// 0x42AB90 = Encrypted NtQueryInformationProcess
+// 0x42AB00 = Encrypted Kernel32.dll
+// 0x42AB40 = Encrypted CreateFileA
+// 0x42AB10 = Encrypted \\\\.\\SICE (driver)
+// 0x42AB30 = Encrypted \\\\.\\NTICE (driver)
+// 0x423C1B = CALL NtQueryInformationProcess
+//  - arg0:GetCurrentProcess()
+//  - arg1: 7, ProcessDebugPort
+//  - arg2: stack variable, out ProcessInformation
+//  - arg3: 4, ProcessInformationLength
+//  - arg4: 0, ReturnLength (optional)
+
 
 void text_ApplyPlatformPatch(SectionInfo& info)
 {
@@ -205,10 +234,16 @@ void text_ApplyCDCheckPatch(SectionInfo& info)
 
 void txt2_ApplyInterruptDebugPatch(SectionInfo& info)
 {
-  //int1 (CD 01)  = 0x42519D -> 90 90
-  size_t sectionOffset = 0x42519D - TXT2_SECTION;
-  info.data[sectionOffset] = 0x90;
-  info.data[sectionOffset + 1] = 0x90;
+  //0x424F90 function (HardwareDebugTrap) attempts to call "int 0x1"
+  //which should result in an exception of 0xC0000005. If a debugger is present,
+  //then this is exception is instead passed to the debugger and it won't enter
+  //the exception handler.
+  size_t sectionOffset = 0x424D69 - TXT2_SECTION;
+  memcpy(&info.data[sectionOffset],
+    "\xC7\x05\x28\xEC\x42\x00\x05\x00\x00\xC0" //mov dword ptr ds:[0x0042EC28], 0xC0000005
+    "\x90\x90\x90\x90\x90",                    //nop (5) remove interrupt exception test
+    15);
+  
 }
 
 void text_DisableDecryption(SectionInfo& info)
@@ -240,11 +275,12 @@ void ApplyF18Patches(std::vector<SectionInfo>& sections)
     }
     else if (txt2.compare(section.name) == 0)
     {
-      txt2_ProcessDebugPortPatch(section);
       txt2_ApplyInterruptDebugPatch(section);
       txt2_drvmgtPatch(section);
       txt2_IsBeingDebuggedPatch(section);
       txt2_BeingDebuggedPEBPatch(section);
+      txt2_SoftICEDebuggerCheck(section);
+      txt2_NTQueryProcessInformationPatch(section);
     }
   }
 }
