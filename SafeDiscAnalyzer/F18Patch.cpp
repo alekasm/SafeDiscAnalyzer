@@ -148,6 +148,9 @@ void txt2_IsBeingDebuggedPatch(SectionInfo& info)
 //42AA58 = GetSystemTime
 //42AA68 = TerminateProcess
 //42AA80 = Sleep
+//4292F0 = CLCD32.DLL
+//429300 = CLC16.DLL
+//429310 = SECDRV_SYS
 
 //42A978 = ReadProcessMemory
 //42A9A0 = WriteProcessMemory
@@ -283,5 +286,79 @@ void ApplyF18Patches(std::vector<SectionInfo>& sections)
       txt2_NTQueryProcessInformationPatch(section);
     }
   }
+}
+
+void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int offset)
+{
+  //This function uses the txt section first
+  const int DECRYPTION_SIZE = 0x20; //pre-defined rdata:00428010
+  const int DECRYPTION_VALUE = 0x9E3779B9; //pre-defined rdata:0042800C
+  const int DECRYPTION_VALUE_START = DECRYPTION_VALUE << 5; // 0xC6EF3720
+  const char encrypted_string[16] = {
+    0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8,
+    0x9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF
+  };
+
+  const unsigned int string_val0 = *((int*)&encrypted_string[0x0]); //0x03020100
+  const unsigned int string_val4 = *((int*)&encrypted_string[0x4]); //0x07060504
+  const unsigned int string_val8 = *((int*)&encrypted_string[0x8]); //0x0B0A0908
+  const unsigned int string_valC = *((int*)&encrypted_string[0xC]); //0x0C0D0E0F
+  
+  const unsigned int init_val1 = *((int*)&info_txt.data[offset + 0]);
+  const unsigned int init_val2 = *((int*)&info_txt.data[offset + 4]);
+
+  unsigned int decryption_key = DECRYPTION_VALUE_START;
+  unsigned int encrypted_val1 = init_val1;
+  unsigned int encrypted_val2 = init_val2;
+
+  for (int i = DECRYPTION_SIZE; i > 0; --i)
+  {
+    unsigned int ival1 = (encrypted_val1 << 4) + string_val8;
+    ival1 = ival1 ^ (encrypted_val1 + decryption_key);
+    unsigned int ival2 = (encrypted_val1 >> 5) + string_valC;
+    ival1 = ival1 ^ ival2;
+
+    encrypted_val2 = encrypted_val2 - ival1;
+    
+    unsigned int jval1 = (encrypted_val2 << 4) + string_val0;
+    jval1 = jval1 ^ (encrypted_val2 + decryption_key);
+    unsigned int jval2 = (encrypted_val2 >> 5) + string_val4;
+    jval1 = jval1 ^ jval2;
+
+    encrypted_val1 = encrypted_val1 - jval1;
+
+    decryption_key -= DECRYPTION_VALUE;
+  }
+
+  printf("Start: ");
+  for (int i = 0; i < 8; ++i)
+    printf("%02X ", info_txt.data[offset + i]);
+  printf("\n");
+
+  char decrypt_buffer[8];
+  memcpy(&decrypt_buffer[0], &encrypted_val1, 4);
+  memcpy(&decrypt_buffer[4], &encrypted_val2, 4);
+
+
+  printf("Intermediate: ");
+  for (int i = 0; i < sizeof(decrypt_buffer); ++i)
+    printf("%02X ", decrypt_buffer[i] & 0xFF);
+  printf("\n");
+
+  unsigned int decryption_skew = 0;
+  for (int i = 0; i < sizeof(decrypt_buffer); ++i)
+  {
+    decrypt_buffer[i] ^= (decryption_skew >> 0);
+    decrypt_buffer[i] ^= (decryption_skew >> 8);
+    decrypt_buffer[i] ^= (decryption_skew >> 16);
+    decrypt_buffer[i] ^= (decryption_skew >> 24);
+    decrypt_buffer[i] ^= info_txt2.data[offset + i];
+    decryption_skew += decrypt_buffer[i] & 0xFF;
+  }
+ 
+  printf("Decrypted: ");
+  for (int i = 0; i < sizeof(decrypt_buffer); ++i)
+    printf("%02X ", decrypt_buffer[i] & 0xFF);
+  printf("\n");
 }
 

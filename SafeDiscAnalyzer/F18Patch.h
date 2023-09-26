@@ -8,3 +8,4 @@ struct Patch
 };
 
 void ApplyF18Patches(std::vector<SectionInfo>&);
+void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int offset);
