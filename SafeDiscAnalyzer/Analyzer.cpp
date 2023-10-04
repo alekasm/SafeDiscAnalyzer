@@ -1,5 +1,6 @@
 #include  "Analyzer.h"
 #include <vector>
+
 struct Function
 {
   DWORD offset;
@@ -57,6 +58,20 @@ find:
   }
 }
 
+std::vector<uint32_t> Analyzer::FindSectionPattern(SectionInfo& info, const char* pattern, const char* mask)
+{
+  DWORD offset = 0;
+  std::vector<uint32_t> results;
+  find:
+  if (FindPattern(info.data, info.header.SizeOfRawData, pattern, mask, offset))
+  {
+    uint32_t soffset = offset + info.header.VirtualAddress + 0x400000;
+    results.push_back(soffset);
+    offset++;
+    goto find;
+  }
+  return results;
+}
 
 int FixAntiDisassembler(SectionInfo& info, const Function& function)
 {
@@ -96,5 +111,65 @@ void Analyzer::PatchSafeDiscAntiDisassembler(SectionInfo& info)
     int result = FixAntiDisassembler(info, f);
     printf("[%s] Analyzed %d garbage bytes in function at: %0X - %0X (size=%0X)\n",
       info.name, result, rva, rva + f.size, f.size);
+  }
+}
+
+bool Analyzer::CreateMD5Hash(std::string filename, std::string& out_hash)
+{
+  DWORD cbHash = 16;
+  HCRYPTHASH hHash = 0;
+  HCRYPTPROV hProv = 0;
+  BYTE rgbHash[16];
+  CHAR rgbDigits[] = "0123456789abcdef";
+  HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
+    OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+  int v = GetLastError();
+  printf("%d\n", v);
+
+  if (hFile == INVALID_HANDLE_VALUE)
+  {
+    std::string error_message = "Failed to retrieve the MD5 Hash of the program:\n";
+    error_message += "CreateFileW has an invalid handle.\n";
+    printf("%s", error_message.c_str());
+    return false;
+  }
+
+  CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT);
+  CryptCreateHash(hProv, CALG_MD5, 0, 0, &hHash);
+
+  BOOL bResult = FALSE;
+  DWORD BUFSIZE = 4096;
+  BYTE rgbFile[4096];
+  DWORD cbRead = 0;
+  while (bResult = ReadFile(hFile, rgbFile, BUFSIZE, &cbRead, NULL))
+  {
+    if (0 == cbRead)
+      break;
+
+    CryptHashData(hHash, rgbFile, cbRead, 0);
+  }
+
+  std::string md5_hash = "";
+  if (CryptGetHashParam(hHash, HP_HASHVAL, rgbHash, &cbHash, 0))
+  {
+    for (DWORD i = 0; i < cbHash; i++)
+    {
+      char buffer[3]; //buffer needs terminating null
+      sprintf_s(buffer, 3, "%c%c", rgbDigits[rgbHash[i] >> 4], rgbDigits[rgbHash[i] & 0xf]);
+      md5_hash.append(buffer);
+    }
+    CryptDestroyHash(hHash);
+    CryptReleaseContext(hProv, 0);
+    CloseHandle(hFile);
+    out_hash = md5_hash;
+    return true;
+  }
+  else
+  {
+    CloseHandle(hFile);
+    std::string error_message = "Failed to retrieve the MD5 Hash of the program:\n";
+    error_message += "CryptGetHashParam returned false.\n";
+    printf("%s", error_message.c_str());
+    return false;
   }
 }

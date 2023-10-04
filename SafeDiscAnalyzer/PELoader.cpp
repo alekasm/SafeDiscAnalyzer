@@ -1,15 +1,10 @@
 #include "PELoader.h"
 
-bool PELoader::PatchPEFile(const char* filepath, const std::vector<SectionInfo>& sections)
+bool PELoader::PatchPEFile(const char* filepath)
 {
   std::string name(filepath);
   name.append(".patch");
 
-  if (!CopyFile(filepath, name.c_str(), FALSE))
-  {
-    printf("Error copying %s to %s, Error: %d\n", filepath, name.c_str(), GetLastError());
-    return false;
-  }
   HANDLE hFile = CreateFile(name.c_str(), GENERIC_READ | GENERIC_WRITE,
     0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (hFile == INVALID_HANDLE_VALUE)
@@ -38,9 +33,36 @@ bool PELoader::PatchPEFile(const char* filepath, const std::vector<SectionInfo>&
   return true;
 }
 
-bool PELoader::LoadPEFile(const char* filepath, std::vector<SectionInfo>& sections)
+bool PELoader::GetSectionInfo(std::string name, SectionInfo* out)
 {
-  HANDLE hFile = CreateFile(filepath, GENERIC_READ,
+  for (SectionInfo& info : sections)
+    if (name.compare(info.name) == 0)
+    {
+      out = &info;
+      return true;
+    }
+  return false;
+}
+
+DWORD align(DWORD size, DWORD align, DWORD addr)
+{
+  if (!(size % align))
+    return addr + size;
+  return addr + (size / align + 1) * align;
+}
+
+bool PELoader::LoadPEFile(const char* filepath)
+{
+  std::string filepath2(filepath);
+  filepath2.append(".patch");
+
+  if (!CopyFile(filepath, filepath2.c_str(), FALSE))
+  {
+    printf("Error copying %s to %s, Error: %d\n", filepath, filepath2.c_str(), GetLastError());
+    return false;
+  }
+
+  HANDLE hFile = CreateFile(filepath2.c_str(), GENERIC_READ | GENERIC_WRITE,
     0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (hFile == INVALID_HANDLE_VALUE)
   {
@@ -73,6 +95,32 @@ bool PELoader::LoadPEFile(const char* filepath, std::vector<SectionInfo>& sectio
   for (WORD i = 0; i < FH->NumberOfSections; ++i)
   {
     std::string name(reinterpret_cast<char const*>(SH[i].Name));
+    if (name.compare(".txt2") == 0)
+    { 
+      ZeroMemory(&SH[FH->NumberOfSections], sizeof(IMAGE_SECTION_HEADER));
+      const char* section_name = ".txt3";
+      CopyMemory(&SH[FH->NumberOfSections].Name, section_name, 8);
+      SH[FH->NumberOfSections].Misc.VirtualSize = SH[i].Misc.VirtualSize;
+      SH[FH->NumberOfSections].VirtualAddress = align(SH[FH->NumberOfSections - 1].Misc.VirtualSize, OH->SectionAlignment, SH[FH->NumberOfSections - 1].VirtualAddress);
+      SH[FH->NumberOfSections].SizeOfRawData = SH[i].SizeOfRawData;
+      SH[FH->NumberOfSections].PointerToRawData = align(SH[FH->NumberOfSections - 1].SizeOfRawData, OH->FileAlignment, SH[FH->NumberOfSections - 1].PointerToRawData);
+      SH[FH->NumberOfSections].Characteristics = SH[i].Characteristics;
+      SetFilePointer(hFile, SH[FH->NumberOfSections].PointerToRawData + SH[FH->NumberOfSections].SizeOfRawData, NULL, FILE_BEGIN);
+      SetEndOfFile(hFile);
+      OH->SizeOfImage = SH[FH->NumberOfSections].VirtualAddress + SH[FH->NumberOfSections].Misc.VirtualSize;
+      FH->NumberOfSections += 1;
+      SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+      WriteFile(hFile, pByte, fileSize, &dw, NULL);
+
+      PBYTE buffer = new BYTE[SH[FH->NumberOfSections - 1].SizeOfRawData];
+      ZeroMemory(buffer, SH[FH->NumberOfSections - 1].SizeOfRawData);
+      DWORD bytesRead;
+      SetFilePointer(hFile, SH[i].PointerToRawData, NULL, FILE_BEGIN);
+      ReadFile(hFile, buffer, SH[i].SizeOfRawData, &bytesRead, NULL);
+      SetFilePointer(hFile, SH[FH->NumberOfSections - 1].PointerToRawData, NULL, FILE_BEGIN);
+      WriteFile(hFile, buffer, SH[i].SizeOfRawData, &dw, NULL);
+      SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+    }
     for (SectionInfo& info : sections)
     {
       if (name.compare(info.name) == 0)
@@ -89,6 +137,7 @@ bool PELoader::LoadPEFile(const char* filepath, std::vector<SectionInfo>& sectio
           header.PointerToRawData,
           header.SizeOfRawData,
           header.Misc.VirtualSize);
+        info.VirtualAddress = header.VirtualAddress + WIN32_PE_ENTRY;
 
         DWORD dwPtr = SetFilePointer(hFile, header.PointerToRawData, NULL, FILE_BEGIN);
         if (dwPtr == INVALID_SET_FILE_POINTER) // Test for failure

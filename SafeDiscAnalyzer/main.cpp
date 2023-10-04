@@ -2,6 +2,9 @@
 #include "Analyzer.h"
 #include "F18Patch.h"
 #include <vector>
+#include <unordered_map>
+
+
 int main(int argc, const char** argv)
 {
 
@@ -24,11 +27,8 @@ int main(int argc, const char** argv)
   }
 
   PELoader loader;
-  std::vector<SectionInfo> sections = {
-    SectionInfo(".text"), SectionInfo(".txt2"), SectionInfo(".txt")
-  };
-  loader.LoadPEFile(argv[1], sections);
-  for (const SectionInfo& section : sections)
+  loader.LoadPEFile(argv[1]);
+  for (const SectionInfo& section : loader.GetSections())
   {
     if (!section.initialized)
     {
@@ -37,24 +37,27 @@ int main(int argc, const char** argv)
     }
   }
 
+  std::string hash;
+  if (Analyzer::CreateMD5Hash(argv[1], hash))
+    printf("Md5: %s\n", hash.c_str());
+
   if (antiasm)
   {
     printf("Analyzing sections for anti-disassembler techniques\n");
-    Analyzer analyzer;
-    for (SectionInfo& section : sections)
-      analyzer.PatchSafeDiscAntiDisassembler(section);
+    for (SectionInfo& section : loader.GetSections())
+      Analyzer::PatchSafeDiscAntiDisassembler(section);
   }
 
   if (bypass)
   {
     printf("Applying F18 patches\n");
-    ApplyF18Patches(sections);
+    ApplyF18Patches(loader);
   }
 
-  bool result = loader.PatchPEFile(argv[1], sections);
+  bool result = loader.PatchPEFile(argv[1]);
 
   printf("Patch successful = %s\n", result ? "true" : "false");
-  for (SectionInfo& section : sections)
+  for (SectionInfo& section : loader.GetSections())
     delete section.data;
   return 0;
 }

@@ -1,6 +1,23 @@
 #include "F18Patch.h"
+
 #define TXT2_SECTION 0x41F000
 #define TEXT_SECTION 0x40C000
+#define DATA_SECTION 0x429000
+
+void data_StringPatch(SectionInfo& info)
+{
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, ".txt2\x00", "xxxxxx");
+  if (offsets.size() != 3)
+  {
+    printf("Found %ld results for .txt2\n", offsets.size());
+    return;
+  }
+  for (uint32_t offset : offsets)
+  {
+    printf("Found .txt2 at 0x%X\n", offset);
+    memcpy(&info.data[offset - info.VirtualAddress], ".txt3", 6);
+  }
+}
 
 void txt2_drvmgtPatch(SectionInfo& info)
 {  
@@ -19,7 +36,15 @@ void txt2_drvmgtPatch(SectionInfo& info)
   //Third argument is the drvmgt return result, which should equal 0x64 for success
   //according to F18.exe and drvmgt.dll
 
-  size_t sectionOffset = 0x4229F0 - TXT2_SECTION;
+  //size_t sectionOffset = 0x4229F0 - TXT2_SECTION;
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x81\xEC\xA0\x02\x00\x00", "xxxxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for drvmgt\n");
+    return;
+  }
+  printf("Found drvmgt at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x8B\x4D\x10"          //mov ecx, dword ptr [ebp + 0x10]
     "\xB8\x64\x00\x00\x00"  //mov eax, 0x64
@@ -52,8 +77,16 @@ void text_CanOpenSecdrvPatch(SectionInfo& info)
 {
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
   //This really doesn't do much besides take in some message then return a bool.
-  size_t sectionOffset = 0x4147A3 - TEXT_SECTION;
 
+  //size_t sectionOffset = 0x4147A3 - TEXT_SECTION;
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x51\xE8\x20\x00\x00\x00", "xxxxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for CanOpenSecdrv\n");
+    return;
+  }
+  printf("Found CanOpenSecdrv at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
     "\xC3",                 //ret
@@ -65,8 +98,15 @@ void text_SecdrvProcessIoctlPatch(SectionInfo& info)
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
   //This really doesn't do much besides take in some message then return a bool.
   //The message passed to the ioctl is 0x42EC30
-  size_t sectionOffset = 0x414818 - TEXT_SECTION;
-
+  //size_t sectionOffset = 0x414818 - TEXT_SECTION;
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x83\xEC\x0C\xE8\xA9\xFF\xFF\xFF", "xxxxxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for SecdrvProcessIoctl\n");
+    return;
+  }
+  printf("Found SecdrvProcessIoctl at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
     "\xC3",                 //ret
@@ -78,8 +118,15 @@ void text_SecdrvStatusMessagePatch(SectionInfo& info)
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
   //This really doesn't do much besides take in some message then return a bool.
   //The message passed to the ioctl is 0x42EC30
-  size_t sectionOffset = 0x414760 - TEXT_SECTION;
-
+  //size_t sectionOffset = 0x414760 - TEXT_SECTION;
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x8B\x45\x08\x83\x38\x01", "xxxxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for SecdrvStatusMessage\n");
+    return;
+  }
+  printf("Found SecdrvStatusMessage at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
     "\xC3",                 //ret
@@ -100,7 +147,15 @@ void text_TickCountLowPatch(SectionInfo& info)
   //You can essentially bypass this by not debugging that function, this patch
   //is provided to allow others to debug
   
-  size_t sectionOffset = 0x4149DB - TEXT_SECTION;
+  //size_t sectionOffset = 0x4149DB - TEXT_SECTION;
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x76\x05\x66\x33\xC0", "xxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for TickCountLow\n");
+    return;
+  }
+  printf("Found TickCountLow at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xEB", //jbe -> jmp
     1);
@@ -119,7 +174,17 @@ KUSER_SHARED_DATA
 void txt2_BeingDebuggedPEBPatch(SectionInfo& info)
 {
   //Uses TIB fs:18 + 0x30 = PEB + 2 = BeingDebugged
-  size_t sectionOffset = 0x42436A - TXT2_SECTION;
+  //TODO: There's actually another check for +0x20 in the larger executable
+  //size_t sectionOffset = 0x42436A - TXT2_SECTION;
+
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x64\xA1\x18\x00\x00\x00\x8B\x48\x30", "xxxxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for BeingDebuggedPEB\n");
+    return;
+  }
+  printf("Found BeingDebuggedPEB at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x33\xC0"                 //xor eax, eax
     "\x90\x90\x90\x90\x90"     //nop (5)
@@ -131,7 +196,15 @@ void txt2_BeingDebuggedPEBPatch(SectionInfo& info)
 void txt2_IsBeingDebuggedPatch(SectionInfo& info)
 {
   //4242A9 they decrypt "IsDebuggerPresent" and call from Kernel32.dll
-  size_t sectionOffset = 0x4242D4 - TXT2_SECTION;
+  //size_t sectionOffset = 0x4242D4 - TXT2_SECTION;
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\xFF\x55\xF0\x66\x89\x85\x4C\xFF\xFF\xFF", "xxxxxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for IsBeingDebugged\n");
+    return;
+  }
+  printf("Found IsBeingDebugged at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x33\xC0"                 //xor eax, eax
     "\x90",                    //nop
@@ -171,7 +244,16 @@ void txt2_NTQueryProcessInformationPatch(SectionInfo& info)
   // 423C57 has checks for NTSTATUS and the return value for ProcessDebugPort
   // ignore these values and just assign 0 to thhe stack variable
   // 423C57: jmp 423C96
-  size_t sectionOffset = 0x423C57 - TXT2_SECTION;
+  //size_t sectionOffset = 0x423C57 - TXT2_SECTION;
+
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x83\xBD\x2C\xFF\xFF\xFF\x00", "xxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for NTQueryProcessInformation\n");
+    return;
+  }
+  printf("Found NTQueryProcessInformation at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xEB\x3D"                 //jmp 0x423C96
     "\x90\x90\x90\x90\x90",     //nop (5), correction for debugging
@@ -188,7 +270,16 @@ void txt2_SoftICEDebuggerCheck(SectionInfo& info)
   //it onto a stack variable, then copied back into the function argument.
   //You want this to be -1, ie CreateFile(\\\\.\\NTICE) fails.
 
-  size_t sectionOffset = 0x423DDF - TXT2_SECTION;
+  //size_t sectionOffset = 0x423DDF - TXT2_SECTION;
+
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x8B\x8D\x60\xFF\xFF\xFF\x51\xFF", "xxxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for SoftICEDebugger\n");
+    return;
+  }
+  printf("Found SoftICEDebugger at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - 0x12 - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\xFF\xFF\xFF\xFF"          //mov eax, 0xFFFFFFFF
     "\x89\x85\x38\xFF\xFF\xFF"     //mov dword ptr ss:[ebp-C8], eax ; kept segment selector
@@ -212,7 +303,7 @@ void txt2_SoftICEDebuggerCheck(SectionInfo& info)
 //  - arg3: 4, ProcessInformationLength
 //  - arg4: 0, ReturnLength (optional)
 
-
+/*
 void text_ApplyPlatformPatch(SectionInfo& info)
 {
   //Just checks dwPlatformId, this check is done a bunch already
@@ -222,13 +313,23 @@ void text_ApplyPlatformPatch(SectionInfo& info)
   size_t sectionOffset = 0x40E082 - TEXT_SECTION;
   info.data[sectionOffset] = 0xEB;
 }
+*/
 
-void text_ApplyCDCheckPatch(SectionInfo& info)
+void text_ApplyFauxCDCheckPatch(SectionInfo& info)
 {
   //The return result doesn't appear to be used, and nothing
   //interesting happens within the function itself besides
   //checking. This could be a purposeful trap.
-  size_t sectionOffset = 0x40F720 - TEXT_SECTION;
+  //size_t sectionOffset = 0x40F720 - TEXT_SECTION;
+
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x81\xEC\x04\x01\x00\x00\x8D\x44\x24\x00", "xxxxxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for FauxCDCheck\n");
+    return;
+  }
+  printf("Found FauxCDCheck at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x66\xB8\x01\x00" //mov ax, 1
     "\xC3",            //ret
@@ -241,14 +342,28 @@ void txt2_ApplyInterruptDebugPatch(SectionInfo& info)
   //which should result in an exception of 0xC0000005. If a debugger is present,
   //then this is exception is instead passed to the debugger and it won't enter
   //the exception handler.
-  size_t sectionOffset = 0x424D69 - TXT2_SECTION;
+  //TODO: This does not appear in the larger executable...
+  //size_t sectionOffset = 0x424D69 - TXT2_SECTION;
+
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\xC7\x05\x00\x00\x00\x00\xFF\x00\x00\x00\xE8", "xx????xxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for InterruptDebug\n");
+    return;
+  }
+  printf("Found InterruptDebug at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  int dvalue;
+  memcpy(&dvalue, &info.data[sectionOffset + 2], 4);
+  printf("InterruptDebug global variable at 0x%X\n", dvalue);
   memcpy(&info.data[sectionOffset],
-    "\xC7\x05\x28\xEC\x42\x00\x05\x00\x00\xC0" //mov dword ptr ds:[0x0042EC28], 0xC0000005
+    "\xC7\x05\x00\x00\x00\x00\x05\x00\x00\xC0" //mov dword ptr ds:[0x0042EC28], 0xC0000005
     "\x90\x90\x90\x90\x90",                    //nop (5) remove interrupt exception test
     15);
-  
+  memcpy(&info.data[sectionOffset + 2] , &dvalue, 4);
 }
 
+/*
 void text_DisableDecryption(SectionInfo& info)
 {
   //We are using the already decrypted .text section which
@@ -259,19 +374,22 @@ void text_DisableDecryption(SectionInfo& info)
     info.data[sectionOffset] = 0x90;
   }
 }
+*/
 
 
-void ApplyF18Patches(std::vector<SectionInfo>& sections)
+void ApplyF18Patches(PELoader& loader)
 {
+  //TODO use offsets
   const std::string text(".text");
   const std::string txt2(".txt2");
-  for (SectionInfo& section : sections)
+  const std::string data(".data");
+  for (SectionInfo& section : loader.GetSections())
   {
     if (text.compare(section.name) == 0)
     {
       text_CanOpenSecdrvPatch(section);
       text_SecdrvProcessIoctlPatch(section);
-      text_ApplyCDCheckPatch(section);
+      text_ApplyFauxCDCheckPatch(section);
       text_SecdrvStatusMessagePatch(section);
       text_TickCountLowPatch(section);
       //text_DisableDecryption(section);
@@ -284,6 +402,10 @@ void ApplyF18Patches(std::vector<SectionInfo>& sections)
       txt2_BeingDebuggedPEBPatch(section);
       txt2_SoftICEDebuggerCheck(section);
       txt2_NTQueryProcessInformationPatch(section);
+    }
+    else if (data.compare(section.name) == 0)
+    {
+      data_StringPatch(section);
     }
   }
 }
