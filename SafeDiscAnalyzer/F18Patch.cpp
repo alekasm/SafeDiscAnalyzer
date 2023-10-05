@@ -3,7 +3,7 @@
 #define TXT2_SECTION 0x41F000
 #define TEXT_SECTION 0x40C000
 #define DATA_SECTION 0x429000
-
+#define SKIP_MAGIC_SKEW TRUE
 void data_StringPatch(SectionInfo& info)
 {
   std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, ".txt2\x00", "xxxxxx");
@@ -96,8 +96,15 @@ void text_CanOpenSecdrvPatch(SectionInfo& info)
 void text_SecdrvProcessIoctlPatch(SectionInfo& info)
 {
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
-  //This really doesn't do much besides take in some message then return a bool.
-  //The message passed to the ioctl is 0x42EC30
+  //This calls an ioctl with the following buffer (IoctlBuffer):
+  //IoctlBuffer[0] = 1 (4 byte)
+  //IoctlBuffer[4] = 3 (4 byte)
+  //IoctlBuffer[8] = 0 (4 byte)
+  //IoctlBuffer[C] = 3C(4 byte) <- control code, checked in secdrv.sys:ProcessIoctl
+  //IoctlBuffer[10] = tickCount
+  //IoctlBuffer[410] = 0 (4 byte)
+  //IoctlBuffer[514] = status message, outBuffer
+  //IoctlBuffer[520] = kernel time reported
   //size_t sectionOffset = 0x414818 - TEXT_SECTION;
   std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x83\xEC\x0C\xE8\xA9\xFF\xFF\xFF", "xxxxxxxxxx");
   if (offsets.size() != 1)
@@ -106,11 +113,28 @@ void text_SecdrvProcessIoctlPatch(SectionInfo& info)
     return;
   }
   printf("Found SecdrvProcessIoctl at 0x%X\n", offsets.at(0));
+
+  //We will use this function as free space to write code that will populate the IoctlBuffer with the expected
+  //values. Luckily there's just a magic number - 0x400. The offset is at the outbuffer section + 410/414 which ends up
+  //being buffer+924/928h
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  int IoctlBuffer = sectionOffset + 0x2C;
+  memcpy(&IoctlBuffer, &info.data[sectionOffset + 0x2C], 4);
   memcpy(&info.data[sectionOffset],
+    "\x8B\x0D\x00\x00\x00\x00"   //mov ecx, [IoctlBuffer]
+    "\x81\xC1\x24\x09\x00\x00"   //add ecx, 0x924
+    "\xB8\x00\x04\x00\x00"       //mov eax, 0x400
+    "\x89\x01"                   //mov [ecx], eax
+    "\x89\x41\x04"               //mov [ecx+4], eax
     "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
     "\xC3",                 //ret
-    6);
+    28);
+  memcpy(&info.data[sectionOffset + 2], &IoctlBuffer, 4);
+}
+
+void txt2_AddMagicSkewValue(SectionInfo& info)
+{
+
 }
 
 void text_SecdrvStatusMessagePatch(SectionInfo& info)
@@ -191,6 +215,12 @@ void txt2_BeingDebuggedPEBPatch(SectionInfo& info)
     "\x90\x90\x90\x90\x90"     //nop (5)
     "\x90",                    //nop
     13);
+}
+
+void txt2_CheckKernel32BreakpointPatch(SectionInfo& info)
+{
+  //Simply jmp 4245A6->42468F. Goes over all functions in the Kernel32 export directory
+  //to see if the first byte of any function has a 0xCC
 }
 
 void txt2_IsBeingDebuggedPatch(SectionInfo& info)
