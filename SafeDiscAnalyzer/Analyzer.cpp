@@ -123,8 +123,6 @@ bool Analyzer::CreateMD5Hash(std::string filename, std::string& out_hash)
   CHAR rgbDigits[] = "0123456789abcdef";
   HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
     OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-  int v = GetLastError();
-  printf("%d\n", v);
 
   if (hFile == INVALID_HANDLE_VALUE)
   {

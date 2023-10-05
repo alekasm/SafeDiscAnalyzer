@@ -26,6 +26,10 @@ int main(int argc, const char** argv)
       bypass = true;
   }
 
+  std::string hash;
+  if (Analyzer::CreateMD5Hash(argv[1], hash))
+    printf("Md5: %s\n", hash.c_str());
+
   PELoader loader;
   loader.LoadPEFile(argv[1]);
   for (const SectionInfo& section : loader.GetSections())
@@ -36,10 +40,6 @@ int main(int argc, const char** argv)
       return 0;
     }
   }
-
-  std::string hash;
-  if (Analyzer::CreateMD5Hash(argv[1], hash))
-    printf("Md5: %s\n", hash.c_str());
 
   if (antiasm)
   {

@@ -44,11 +44,9 @@ bool PELoader::GetSectionInfo(std::string name, SectionInfo* out)
   return false;
 }
 
-DWORD align(DWORD size, DWORD align, DWORD addr)
+DWORD align(DWORD addr, DWORD align)
 {
-  if (!(size % align))
-    return addr + size;
-  return addr + (size / align + 1) * align;
+  return (addr + align) - (addr % align);
 }
 
 bool PELoader::LoadPEFile(const char* filepath)
@@ -71,7 +69,9 @@ bool PELoader::LoadPEFile(const char* filepath)
   }
 
   DWORD fileSize = GetFileSize(hFile, NULL);
+  DWORD EndOfFile = fileSize;
   BYTE* pByte = new BYTE[fileSize];
+  
   DWORD dw;
   if (!ReadFile(hFile, pByte, fileSize, &dw, NULL))
   {
@@ -79,74 +79,113 @@ bool PELoader::LoadPEFile(const char* filepath)
     return false;
   }
 
-  PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)pByte;
-  if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+  PIMAGE_DOS_HEADER DOS = (PIMAGE_DOS_HEADER)pByte;
+  if (DOS->e_magic != IMAGE_DOS_SIGNATURE)
   {
     printf("File is missing DOS signature\n");
     return false;
   }
+  
+  PIMAGE_NT_HEADERS NT = (PIMAGE_NT_HEADERS)(pByte + DOS->e_lfanew);
+  if (NT->Signature != IMAGE_NT_SIGNATURE)
+  {
+    printf("File is missing NT signature\n");
+    return false;
+  }
 
-  PIMAGE_FILE_HEADER FH = (PIMAGE_FILE_HEADER)(pByte + dos->e_lfanew + sizeof(DWORD));
-  PIMAGE_OPTIONAL_HEADER OH = (PIMAGE_OPTIONAL_HEADER)(pByte + dos->e_lfanew + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER));
-  PIMAGE_SECTION_HEADER SH = (PIMAGE_SECTION_HEADER)(pByte + dos->e_lfanew + sizeof(IMAGE_NT_HEADERS));
+  PIMAGE_FILE_HEADER FH = &NT->FileHeader;
+  PIMAGE_OPTIONAL_HEADER OH = &NT->OptionalHeader;
+  if (OH->Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+  {
+    printf("File is missing Optional Header signature\n");
+    return false;
+  }
+  PIMAGE_SECTION_HEADER SH = (PIMAGE_SECTION_HEADER)((PBYTE)OH + FH->SizeOfOptionalHeader);
+
+  //The offset of the first Section Header is 0x178, and if the PE is standard the first section
+  //starts at offset 0x400 - each section header is 0x28 bytes. This means that there can be
+  //16 section headers without having to move the actual sections - a problem with adding sections
+  //on ELFs.
 
   printf("Total sections: %d\n", FH->NumberOfSections);
-
   for (WORD i = 0; i < FH->NumberOfSections; ++i)
   {
     std::string name(reinterpret_cast<char const*>(SH[i].Name));
-    if (name.compare(".txt2") == 0)
-    { 
-      ZeroMemory(&SH[FH->NumberOfSections], sizeof(IMAGE_SECTION_HEADER));
-      const char* section_name = ".txt3";
-      CopyMemory(&SH[FH->NumberOfSections].Name, section_name, 8);
-      SH[FH->NumberOfSections].Misc.VirtualSize = SH[i].Misc.VirtualSize;
-      SH[FH->NumberOfSections].VirtualAddress = align(SH[FH->NumberOfSections - 1].Misc.VirtualSize, OH->SectionAlignment, SH[FH->NumberOfSections - 1].VirtualAddress);
-      SH[FH->NumberOfSections].SizeOfRawData = SH[i].SizeOfRawData;
-      SH[FH->NumberOfSections].PointerToRawData = align(SH[FH->NumberOfSections - 1].SizeOfRawData, OH->FileAlignment, SH[FH->NumberOfSections - 1].PointerToRawData);
-      SH[FH->NumberOfSections].Characteristics = SH[i].Characteristics;
-      SetFilePointer(hFile, SH[FH->NumberOfSections].PointerToRawData + SH[FH->NumberOfSections].SizeOfRawData, NULL, FILE_BEGIN);
-      SetEndOfFile(hFile);
-      OH->SizeOfImage = SH[FH->NumberOfSections].VirtualAddress + SH[FH->NumberOfSections].Misc.VirtualSize;
-      FH->NumberOfSections += 1;
+    printf("%s: VA=%0X,RVA=%0X,PA=%0X,RDP=%0X,RSZ=%0X,VSZ=%0X\n",
+      name.c_str(),
+      SH[i].VirtualAddress, SH[i].VirtualAddress + WIN32_PE_ENTRY,
+      SH[i].Misc.PhysicalAddress,
+      SH[i].PointerToRawData,
+      SH[i].SizeOfRawData,
+      SH[i].Misc.VirtualSize);
+
+    const char* section_name = NULL;
+    const char* section_copy = NULL;
+    for (SectionInfo& info : sections)
+    {
+      if (info.copy != NULL && name.compare(info.name) == 0)
+      {
+        section_name = info.name;
+        section_copy = info.copy;
+        break;
+      }
+    }
+    
+    if (section_copy)
+    {
+      //Make an assumption that the last entry is also the last virtually for data
+      WORD EndIndex = FH->NumberOfSections - 1;
+      WORD NewIndex = FH->NumberOfSections;
+      ZeroMemory(&SH[NewIndex], sizeof(IMAGE_SECTION_HEADER));
+      CopyMemory(&SH[NewIndex].Name, section_copy, 8);
+      SH[NewIndex].Misc.VirtualSize = SH[i].Misc.VirtualSize;
+      SH[NewIndex].VirtualAddress = align(SH[EndIndex].VirtualAddress + SH[EndIndex].Misc.VirtualSize, OH->SectionAlignment);
+      SH[NewIndex].SizeOfRawData = SH[i].SizeOfRawData;
+      SH[NewIndex].Characteristics = SH[i].Characteristics;
+      SH[NewIndex].PointerToRawData = align(EndOfFile, OH->FileAlignment);
+
+      OH->SizeOfImage = SH[NewIndex].VirtualAddress + SH[NewIndex].Misc.VirtualSize;
+      FH->NumberOfSections++;
+      EndOfFile = EndOfFile + SH[EndIndex].SizeOfRawData;
+
+      //Update with the new header info
       SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
       WriteFile(hFile, pByte, fileSize, &dw, NULL);
 
-      PBYTE buffer = new BYTE[SH[FH->NumberOfSections - 1].SizeOfRawData];
-      ZeroMemory(buffer, SH[FH->NumberOfSections - 1].SizeOfRawData);
+      PBYTE buffer = new BYTE[SH[NewIndex].SizeOfRawData];
+      ZeroMemory(buffer, SH[NewIndex].SizeOfRawData);
       DWORD bytesRead;
+     
+      printf("Copying %s (Offset: 0x%X, VA:0x%X) section to %s (Offset:0x%X, VA:0x%X)\n",
+        SH[i].Name, SH[i].PointerToRawData, SH[i].VirtualAddress + WIN32_PE_ENTRY,
+        SH[NewIndex].Name, SH[NewIndex].PointerToRawData,
+        SH[NewIndex].VirtualAddress + WIN32_PE_ENTRY);
+
       SetFilePointer(hFile, SH[i].PointerToRawData, NULL, FILE_BEGIN);
-      ReadFile(hFile, buffer, SH[i].SizeOfRawData, &bytesRead, NULL);
-      SetFilePointer(hFile, SH[FH->NumberOfSections - 1].PointerToRawData, NULL, FILE_BEGIN);
-      WriteFile(hFile, buffer, SH[i].SizeOfRawData, &dw, NULL);
-      SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+      if (!ReadFile(hFile, buffer, SH[i].SizeOfRawData, &bytesRead, NULL))
+      {
+        printf("Error reading file: %d\n", GetLastError());
+        return false;
+      }
+
+      SetFilePointer(hFile, SH[NewIndex].PointerToRawData, NULL, FILE_BEGIN);
+      if (!WriteFile(hFile, buffer, SH[NewIndex].SizeOfRawData, &dw, NULL))
+      {
+        printf("Error writing file: %d\n", GetLastError());
+        return false;
+      }
     }
+
     for (SectionInfo& info : sections)
     {
       if (name.compare(info.name) == 0)
       {
         IMAGE_SECTION_HEADER header;
         ZeroMemory(&header, sizeof(IMAGE_SECTION_HEADER));
-        header = SH[i];
-        //File Offset will be PointerToRawData (1D800)
-        //Section Size will be SizeOfRawData (8200)
-        printf("%s: VA=%0X,RVA=%0X,PA=%0X,RDP=%0X,RSZ=%0X,VSZ=%0X\n",
-          name.c_str(),
-          header.VirtualAddress, header.VirtualAddress + WIN32_PE_ENTRY,
-          header.Misc.PhysicalAddress,
-          header.PointerToRawData,
-          header.SizeOfRawData,
-          header.Misc.VirtualSize);
+        memcpy(&header, &SH[i], sizeof(IMAGE_SECTION_HEADER));
         info.VirtualAddress = header.VirtualAddress + WIN32_PE_ENTRY;
 
-        DWORD dwPtr = SetFilePointer(hFile, header.PointerToRawData, NULL, FILE_BEGIN);
-        if (dwPtr == INVALID_SET_FILE_POINTER) // Test for failure
-        {
-          printf("Failed to SetFilePointer: %d\n", GetLastError());
-          CloseHandle(hFile);
-          return false;
-        }
-
+        SetFilePointer(hFile, header.PointerToRawData, NULL, FILE_BEGIN);
         PBYTE buffer = new BYTE[header.SizeOfRawData];
         ZeroMemory(buffer, header.SizeOfRawData);
         DWORD bytesRead;
@@ -164,6 +203,7 @@ bool PELoader::LoadPEFile(const char* filepath)
         break;
       }
     }
+    //delete pByte;
   }
 
   CloseHandle(hFile);

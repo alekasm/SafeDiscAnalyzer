@@ -17,6 +17,18 @@ void data_StringPatch(SectionInfo& info)
     printf("Found .txt2 at 0x%X\n", offset);
     memcpy(&info.data[offset - info.VirtualAddress], ".txt3", 6);
   }
+
+  std::vector<uint32_t> offsets2 = Analyzer::FindSectionPattern(info, ".text\x00", "xxxxxx");
+  if (offsets2.size() != 1)
+  {
+    printf("Found %ld results for .text\n", offsets2.size());
+    return;
+  }
+  for (uint32_t offset : offsets2)
+  {
+    printf("Found .text at 0x%X\n", offset);
+    memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
+  }
 }
 
 void txt2_drvmgtPatch(SectionInfo& info)
@@ -118,7 +130,7 @@ void text_SecdrvProcessIoctlPatch(SectionInfo& info)
   //values. Luckily there's just a magic number - 0x400. The offset is at the outbuffer section + 410/414 which ends up
   //being buffer+924/928h
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  int IoctlBuffer = sectionOffset + 0x2C;
+  int IoctlBuffer;
   memcpy(&IoctlBuffer, &info.data[sectionOffset + 0x2C], 4);
   memcpy(&info.data[sectionOffset],
     "\x8B\x0D\x00\x00\x00\x00"   //mov ecx, [IoctlBuffer]
@@ -132,10 +144,34 @@ void text_SecdrvProcessIoctlPatch(SectionInfo& info)
   memcpy(&info.data[sectionOffset + 2], &IoctlBuffer, 4);
 }
 
-void txt2_AddMagicSkewValue(SectionInfo& info)
+void txt2_AddMagicSkewValuePatch(SectionInfo& info)
 {
-
+  //Just bypass all the various checks and secdrv ioctls by applying the magic number to the decryption skew
+  //33 C2 2B C2 83 E0 0F
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x33\xC2\x2B\xC2\x83\xE0\x0F", "xxxxxxx");
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for AddMagicSkewValue\n");
+    return;
+  }
+  printf("Found AddMagicSkewValue at 0x%X\n", offsets.at(0));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  char jne[0x6];
+  memcpy(jne, &info.data[sectionOffset + 0xD], 6);
+  jne[1] = 0x84; //jnz -> jz
+  size_t start = sectionOffset + 0x13;
+  int DecryptionValueWithSkew;
+  memcpy(&DecryptionValueWithSkew, &info.data[sectionOffset - 0xD], 4);
+  memcpy(&info.data[start],
+    "\x8B\x0D\x00\x00\x00\x00"   //mov ecx, [DecryptionValueWithSkew]
+    "\x81\xC1\x00\x04\x00\x00"   //add ecx, 0x400
+    "\x89\x0D\x00\x00\x00\x00",       //mov [DecryptionValueWithSkew], ecx
+    18);
+  memcpy(&info.data[start + 2], &DecryptionValueWithSkew, 4);
+  memcpy(&info.data[start + 14], &DecryptionValueWithSkew, 4);
+  memcpy(&info.data[start + 18], jne, sizeof(jne));
 }
+
 
 void text_SecdrvStatusMessagePatch(SectionInfo& info)
 {
@@ -385,7 +421,7 @@ void txt2_ApplyInterruptDebugPatch(SectionInfo& info)
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   int dvalue;
   memcpy(&dvalue, &info.data[sectionOffset + 2], 4);
-  printf("InterruptDebug global variable at 0x%X\n", dvalue);
+  //printf("InterruptDebug global variable at 0x%X\n", dvalue);
   memcpy(&info.data[sectionOffset],
     "\xC7\x05\x00\x00\x00\x00\x05\x00\x00\xC0" //mov dword ptr ds:[0x0042EC28], 0xC0000005
     "\x90\x90\x90\x90\x90",                    //nop (5) remove interrupt exception test
@@ -432,6 +468,7 @@ void ApplyF18Patches(PELoader& loader)
       txt2_BeingDebuggedPEBPatch(section);
       txt2_SoftICEDebuggerCheck(section);
       txt2_NTQueryProcessInformationPatch(section);
+      //txt2_AddMagicSkewValuePatch(section);
     }
     else if (data.compare(section.name) == 0)
     {
