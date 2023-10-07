@@ -3,7 +3,7 @@
 #define TXT2_SECTION 0x41F000
 #define TEXT_SECTION 0x40C000
 #define DATA_SECTION 0x429000
-#define SKIP_MAGIC_SKEW TRUE
+
 void data_StringPatch(SectionInfo& info)
 {
   std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, ".txt2\x00", "xxxxxx");
@@ -146,8 +146,11 @@ void text_SecdrvProcessIoctlPatch(SectionInfo& info)
 
 void txt2_AddMagicSkewValuePatch(SectionInfo& info)
 {
-  //Just bypass all the various checks and secdrv ioctls by applying the magic number to the decryption skew
-  //33 C2 2B C2 83 E0 0F
+  //Just bypass all the various checks and secdrv ioctls by applying the magic number to the decryption skew.
+  //This value is found in secdrv.sys GetDebugRegister (Command=3C) at 0x10F60, register dr7 = 0x400.
+  //When the ioctl buffer is inspected back in program space, it's not really manipulated in the weird looking
+  //decryption function at 0x416B40 (DecryptIoctlMessage). The result from DecryptIoctlMessage is 0x400 - 
+  //then that's added to DecryptionValueWithSkew.
   std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x33\xC2\x2B\xC2\x83\xE0\x0F", "xxxxxxx");
   if (offsets.size() != 1)
   {
@@ -156,20 +159,18 @@ void txt2_AddMagicSkewValuePatch(SectionInfo& info)
   }
   printf("Found AddMagicSkewValue at 0x%X\n", offsets.at(0));
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  char jne[0x6];
-  memcpy(jne, &info.data[sectionOffset + 0xD], 6);
-  jne[1] = 0x84; //jnz -> jz
+  
   size_t start = sectionOffset + 0x13;
   int DecryptionValueWithSkew;
   memcpy(&DecryptionValueWithSkew, &info.data[sectionOffset - 0xD], 4);
   memcpy(&info.data[start],
     "\x8B\x0D\x00\x00\x00\x00"   //mov ecx, [DecryptionValueWithSkew]
-    "\x81\xC1\x00\x04\x00\x00"   //add ecx, 0x400
-    "\x89\x0D\x00\x00\x00\x00",       //mov [DecryptionValueWithSkew], ecx
-    18);
+    "\x81\xC1\x00\x04\x00\x00"   //add ecx, 0x400 - this sets ZF to 0, so we can then use the jnz
+    "\x89\x0D\x00\x00\x00\x00"  //mov [DecryptionValueWithSkew], ecx
+    "\xEB\xE6",                 //jmp 0xffffffe8 -0x18
+    20);
   memcpy(&info.data[start + 2], &DecryptionValueWithSkew, 4);
   memcpy(&info.data[start + 14], &DecryptionValueWithSkew, 4);
-  memcpy(&info.data[start + 18], jne, sizeof(jne));
 }
 
 
@@ -443,7 +444,7 @@ void text_DisableDecryption(SectionInfo& info)
 */
 
 
-void ApplyF18Patches(PELoader& loader)
+void ApplyF18Patches(PELoader& loader, bool magic)
 {
   //TODO use offsets
   const std::string text(".text");
@@ -453,22 +454,39 @@ void ApplyF18Patches(PELoader& loader)
   {
     if (text.compare(section.name) == 0)
     {
-      text_CanOpenSecdrvPatch(section);
-      text_SecdrvProcessIoctlPatch(section);
       text_ApplyFauxCDCheckPatch(section);
-      text_SecdrvStatusMessagePatch(section);
-      text_TickCountLowPatch(section);
-      //text_DisableDecryption(section);
+      
+      if (!magic)
+      {
+        text_CanOpenSecdrvPatch(section);
+        text_SecdrvProcessIoctlPatch(section);
+        text_TickCountLowPatch(section);
+        text_SecdrvStatusMessagePatch(section);
+      }
+      
     }
     else if (txt2.compare(section.name) == 0)
     {
+
+      if (magic)
+      {
+        txt2_AddMagicSkewValuePatch(section);
+      }
+
+      if (!magic)
+      {
+        txt2_IsBeingDebuggedPatch(section);
+        txt2_BeingDebuggedPEBPatch(section);
+        txt2_CheckKernel32BreakpointPatch(section);
+      }
+
+
       txt2_ApplyInterruptDebugPatch(section);
       txt2_drvmgtPatch(section);
-      txt2_IsBeingDebuggedPatch(section);
-      txt2_BeingDebuggedPEBPatch(section);
       txt2_SoftICEDebuggerCheck(section);
       txt2_NTQueryProcessInformationPatch(section);
-      //txt2_AddMagicSkewValuePatch(section);
+   
+      
     }
     else if (data.compare(section.name) == 0)
     {

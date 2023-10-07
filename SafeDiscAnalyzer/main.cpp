@@ -13,17 +13,23 @@ int main(int argc, const char** argv)
     printf("Usage: ./SafeDiscAnalyzer.exe <file> <args>\nArguments:\n");
     printf("-antiasm\tpatches anti-disassembler routines\n");
     printf("-bypass\tapplies various patches to crack the game\n");
+    printf("-magic\tuses magic value from kernel driver + decryption\n");
     return 0;
   }
 
+
+
   bool antiasm = false;
   bool bypass = false;
+  bool magic = false;
   for (int i = 2; i < argc; ++i)
   {
     if (std::string("-antiasm").compare(argv[i]) == 0)
       antiasm = true;
     else if (std::string("-bypass").compare(argv[i]) == 0)
       bypass = true;
+    else if (std::string("-magic").compare(argv[i]) == 0)
+      magic = true;
   }
 
   std::string hash;
@@ -51,7 +57,7 @@ int main(int argc, const char** argv)
   if (bypass)
   {
     printf("Applying F18 patches\n");
-    ApplyF18Patches(loader);
+    ApplyF18Patches(loader, magic);
   }
 
   bool result = loader.PatchPEFile(argv[1]);
