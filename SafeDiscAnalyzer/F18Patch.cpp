@@ -26,8 +26,8 @@ void data_StringPatch(SectionInfo& info)
   }
   for (uint32_t offset : offsets2)
   {
-    printf("Found .text at 0x%X\n", offset);
-    memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
+    //printf("Found .text at 0x%X\n", offset);
+   // memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
   }
 }
 
@@ -454,7 +454,11 @@ void ApplyF18Patches(PELoader& loader, bool magic)
   {
     if (text.compare(section.name) == 0)
     {
-      text_ApplyFauxCDCheckPatch(section);
+
+      //Modifications to the text still go reported even with a copied .text section
+      //need to take another look. This means it's also going to pick up breakpoints
+
+      //text_ApplyFauxCDCheckPatch(section);
       
       if (!magic)
       {
