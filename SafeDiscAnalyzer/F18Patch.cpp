@@ -495,7 +495,7 @@ void ApplyF18Patches(PELoader& loader, bool magic)
   }
 }
 
-void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int offset)
+void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int size)
 {
   //This function uses the txt section first
   const int DECRYPTION_SIZE = 0x20; //pre-defined rdata:00428010
@@ -511,13 +511,20 @@ void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int offset)
   const unsigned int string_val8 = *((int*)&encrypted_string[0x8]); //0x0B0A0908
   const unsigned int string_valC = *((int*)&encrypted_string[0xC]); //0x0C0D0E0F
   
-  const unsigned int init_val1 = *((int*)&info_txt.data[offset + 0]);
-  const unsigned int init_val2 = *((int*)&info_txt.data[offset + 4]);
-
   unsigned int decryption_key = DECRYPTION_VALUE_START;
+
+  int index = 0;
+  char* decrypt_buffer = new char[size];
+  memset(decrypt_buffer, 0, size);
+
+  iter_firstpass:
+  const unsigned int init_val1 = *((int*)&info_txt.data[index + 0]);
+  const unsigned int init_val2 = *((int*)&info_txt.data[index + 4]);
   unsigned int encrypted_val1 = init_val1;
   unsigned int encrypted_val2 = init_val2;
+  decryption_key = DECRYPTION_VALUE_START;
 
+  //XORDecryptionOnBuffer - 0x421891
   for (int i = DECRYPTION_SIZE; i > 0; --i)
   {
     unsigned int ival1 = (encrypted_val1 << 4) + string_val8;
@@ -536,36 +543,47 @@ void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int offset)
 
     decryption_key -= DECRYPTION_VALUE;
   }
+  memcpy(&decrypt_buffer[index + 0], &encrypted_val1, 4);
+  memcpy(&decrypt_buffer[index + 4], &encrypted_val2, 4);
 
+  index += 8;
+  if (index < size)
+    goto iter_firstpass;
+
+  /*
   printf("Start: ");
-  for (int i = 0; i < 8; ++i)
-    printf("%02X ", info_txt.data[offset + i]);
+  for (int i = 0; i < size; ++i)
+    printf("%02X ", info_txt.data[i]);
   printf("\n");
-
-  char decrypt_buffer[8];
-  memcpy(&decrypt_buffer[0], &encrypted_val1, 4);
-  memcpy(&decrypt_buffer[4], &encrypted_val2, 4);
-
 
   printf("Intermediate: ");
-  for (int i = 0; i < sizeof(decrypt_buffer); ++i)
+  for (int i = 0; i < size; ++i)
     printf("%02X ", decrypt_buffer[i] & 0xFF);
   printf("\n");
+  */
 
+  //0x421B38 - DecryptXORSections
   unsigned int decryption_skew = 0;
-  for (int i = 0; i < sizeof(decrypt_buffer); ++i)
+  for (int i = 0; i < size; ++i)
   {
     decrypt_buffer[i] ^= (decryption_skew >> 0);
     decrypt_buffer[i] ^= (decryption_skew >> 8);
     decrypt_buffer[i] ^= (decryption_skew >> 16);
     decrypt_buffer[i] ^= (decryption_skew >> 24);
-    decrypt_buffer[i] ^= info_txt2.data[offset + i];
+    decrypt_buffer[i] ^= info_txt2.data[i];
     decryption_skew += decrypt_buffer[i] & 0xFF;
+    if ((i + 1) % 0x10 == 0) //421DB9
+      decryption_skew += 0x400; //dr7 result from secdrv driver
   }
  
-  printf("Decrypted: ");
-  for (int i = 0; i < sizeof(decrypt_buffer); ++i)
+  printf("Decrypted:\n");
+  for (int i = 0; i < size; ++i)
+  {
     printf("%02X ", decrypt_buffer[i] & 0xFF);
+    if ((i + 1) % 0x10 == 0)
+      printf("\n");
+  }
   printf("\n");
+  delete[] decrypt_buffer;
 }
 

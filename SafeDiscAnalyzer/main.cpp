@@ -47,6 +47,9 @@ int main(int argc, const char** argv)
     }
   }
 
+  //Decrypt(loader.GetSections().at(2), loader.GetSections().at(1), 128 - 1);
+  //return 0;
+
   if (antiasm)
   {
     printf("Analyzing sections for anti-disassembler techniques\n");
