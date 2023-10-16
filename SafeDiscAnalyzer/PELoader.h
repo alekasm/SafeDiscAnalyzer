@@ -6,12 +6,12 @@
 static const DWORD WIN32_PE_ENTRY = 0x400000;
 struct SectionInfo {
   SectionInfo(const char* name, const char* copy, BOOL decryptedExec = FALSE) : 
-    name(name), copy(copy), decryptedExec(TRUE)
+    name(name), copy(copy)
   {
     ZeroMemory(&header, sizeof(IMAGE_SECTION_HEADER));
   }
   SectionInfo(const char* name, BOOL decryptedExec = FALSE) : 
-    name(name), decryptedExec(decryptedExec)
+    name(name)
   {
     ZeroMemory(&header, sizeof(IMAGE_SECTION_HEADER));
   }
@@ -25,7 +25,6 @@ struct SectionInfo {
   uint32_t VirtualAddress;
   IMAGE_SECTION_HEADER header;
   BOOL initialized = FALSE;
-  BOOL decryptedExec = FALSE;
 };
 
 struct PELoader

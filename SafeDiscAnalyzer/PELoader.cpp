@@ -146,7 +146,7 @@ bool PELoader::LoadPEFile(const char* filepath)
 
       OH->SizeOfImage = SH[NewIndex].VirtualAddress + SH[NewIndex].Misc.VirtualSize;
       FH->NumberOfSections++;
-      EndOfFile = EndOfFile + SH[EndIndex].SizeOfRawData;
+      EndOfFile = EndOfFile + SH[NewIndex].SizeOfRawData;
 
       //Update with the new header info
       SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
@@ -158,8 +158,7 @@ bool PELoader::LoadPEFile(const char* filepath)
      
       printf("Copying %s (Offset: 0x%X, VA:0x%X) section to %s (Offset:0x%X, VA:0x%X)\n",
         SH[i].Name, SH[i].PointerToRawData, SH[i].VirtualAddress + WIN32_PE_ENTRY,
-        SH[NewIndex].Name, SH[NewIndex].PointerToRawData,
-        SH[NewIndex].VirtualAddress + WIN32_PE_ENTRY);
+        SH[NewIndex].Name, SH[NewIndex].PointerToRawData, SH[NewIndex].VirtualAddress + WIN32_PE_ENTRY);
 
       SetFilePointer(hFile, SH[i].PointerToRawData, NULL, FILE_BEGIN);
       if (!ReadFile(hFile, buffer, SH[i].SizeOfRawData, &bytesRead, NULL))
@@ -175,6 +174,16 @@ bool PELoader::LoadPEFile(const char* filepath)
         return false;
       }
     }
+
+    /*
+    if (name.compare(".idata") == 0)
+    {
+      printf("Looking at idata section: 0x%X\n", SH[i].PointerToRawData);
+      IMAGE_IMPORT_DESCRIPTOR Start = (IMAGE_IMPORT_DESCRIPTOR)pByte[SH[i].PointerToRawData];
+      printf("Start Name: %s\n", Start->Name);
+      printf("xyz: 0x%X\n", Start->OriginalFirstThunk);
+    }
+    */
 
     for (SectionInfo& info : sections)
     {

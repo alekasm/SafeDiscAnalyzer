@@ -4,6 +4,30 @@
 #define TEXT_SECTION 0x40C000
 #define DATA_SECTION 0x429000
 
+//42A9D8 = ReadProcessMemory
+//42A9F0 = WriteProcessMemory
+//42AA08 = VirtualProtect
+//42AA18 = CreateProcessA
+//42AA28 = CreateProcessW
+//42AA38 = GetStartupInfoA
+//42AA48 = GetStartupInfoW
+//42AA58 = GetSystemTime
+//42AA68 = TerminateProcess
+//42AA80 = Sleep
+//4292F0 = CLCD32.DLL
+//429300 = CLC16.DLL
+//429310 = SECDRV_SYS
+//42A978 = ReadProcessMemory
+//42A9A0 = WriteProcessMemory
+//42A9B8 = VirtualProtect
+//42AB50 = IsDebuggerPresent
+//42AB80 = Ntdll
+//42AB90 = NtQueryInformationProcess
+//42AB00 = Kernel32.dll
+//42AB40 = CreateFileA
+//42AB10 = \\\\.\\SICE
+//42AB30 = \\\\.\\NTICE
+
 void data_StringPatch(SectionInfo& info)
 {
   std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, ".txt2\x00", "xxxxxx");
@@ -27,7 +51,7 @@ void data_StringPatch(SectionInfo& info)
   for (uint32_t offset : offsets2)
   {
     //printf("Found .text at 0x%X\n", offset);
-   // memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
+    //memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
   }
 }
 
@@ -65,25 +89,8 @@ void txt2_drvmgtPatch(SectionInfo& info)
     "\xC3",                 //ret
     16);
 
-
   //sub_40F780 drive check needs to return 1 for true
 }
-
-
-//Contains three separate debugging checks.
-//1. 4242A9 they decrypt "IsDebuggerPresent" and call from Kernel32.dll
-//2. Uses TIB fs:18 + 0x30 = PEB + 2 = BeingDebugged
-//3. Uses DeviceIoControl to communicate with driver  \\\\.\\Secdrv
-
-//These catches will then determine how they manipulate arg_0
-//If SecdrvVerification fails, arg_0 & 0x2D325697.
-//If SecdrvVerification passes, arg_0 = var_C0
-
-//If BeingDebuggedPEB || IsDebuggerPresent, arg_0 & 0FD356997
-//If dwPlatformId != VER_PLATFORM_WIN32_NT, arg_0 & 1145373A
-//If A8_Counter > 0, arg_0 & 5185DADE
-
-//The Objective is arg_0 = var_C0, which is complicated inside of SecdrvVerification
 
 void text_CanOpenSecdrvPatch(SectionInfo& info)
 {
@@ -278,26 +285,6 @@ void txt2_IsBeingDebuggedPatch(SectionInfo& info)
     3);
 }
 
-//42A9D8 = ReadProcessMemory
-//42A9F0 = WriteProcessMemory
-//42AA08 = VirtualProtect
-//42AA18 = CreateProcessA
-//42AA28 = CreateProcessW
-//42AA38 = GetStartupInfoA
-//42AA48 = GetStartupInfoW
-//42AA58 = GetSystemTime
-//42AA68 = TerminateProcess
-//42AA80 = Sleep
-//4292F0 = CLCD32.DLL
-//429300 = CLC16.DLL
-//429310 = SECDRV_SYS
-
-//42A978 = ReadProcessMemory
-//42A9A0 = WriteProcessMemory
-//42A9B8 = VirtualProtect
-
-//42AB50 = IsDebuggerPresent
-
 void txt2_NTQueryProcessInformationPatch(SectionInfo& info)
 {
   //Function: 0x4239DF
@@ -357,12 +344,6 @@ void txt2_SoftICEDebuggerCheck(SectionInfo& info)
 //Function: 0x4239DF
 //SafeDiscError(0x04, 0x07, 0x10)
 //This function has various strings that are decrypted
-// 0x42AB80 = Encrypted Ntdll
-// 0x42AB90 = Encrypted NtQueryInformationProcess
-// 0x42AB00 = Encrypted Kernel32.dll
-// 0x42AB40 = Encrypted CreateFileA
-// 0x42AB10 = Encrypted \\\\.\\SICE (driver)
-// 0x42AB30 = Encrypted \\\\.\\NTICE (driver)
 // 0x423C1B = CALL NtQueryInformationProcess
 //  - arg0:GetCurrentProcess()
 //  - arg1: 7, ProcessDebugPort
@@ -370,17 +351,6 @@ void txt2_SoftICEDebuggerCheck(SectionInfo& info)
 //  - arg3: 4, ProcessInformationLength
 //  - arg4: 0, ReturnLength (optional)
 
-/*
-void text_ApplyPlatformPatch(SectionInfo& info)
-{
-  //Just checks dwPlatformId, this check is done a bunch already
-  //and its not really necessary to patch
-  //SafeDiscError3 = jne->jmp = 0x40E082 = 75 -> EB
-  //SafeDiscError(0x03, 0x08, 0x10)
-  size_t sectionOffset = 0x40E082 - TEXT_SECTION;
-  info.data[sectionOffset] = 0xEB;
-}
-*/
 
 void text_ApplyFauxCDCheckPatch(SectionInfo& info)
 {
@@ -446,7 +416,6 @@ void text_DisableDecryption(SectionInfo& info)
 
 void ApplyF18Patches(PELoader& loader, bool magic)
 {
-  //TODO use offsets
   const std::string text(".text");
   const std::string txt2(".txt2");
   const std::string data(".data");
@@ -454,12 +423,7 @@ void ApplyF18Patches(PELoader& loader, bool magic)
   {
     if (text.compare(section.name) == 0)
     {
-
-      //Modifications to the text still go reported even with a copied .text section
-      //need to take another look. This means it's also going to pick up breakpoints
-
       //text_ApplyFauxCDCheckPatch(section);
-      
       if (!magic)
       {
         text_CanOpenSecdrvPatch(section);
@@ -489,8 +453,8 @@ void ApplyF18Patches(PELoader& loader, bool magic)
       txt2_drvmgtPatch(section);
       txt2_SoftICEDebuggerCheck(section);
       txt2_NTQueryProcessInformationPatch(section);
-   
-      
+
+
     }
     else if (data.compare(section.name) == 0)
     {
@@ -499,9 +463,12 @@ void ApplyF18Patches(PELoader& loader, bool magic)
   }
 }
 
-void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int size)
+void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_text, int showOffset, int showSize)
 {
-  //This function uses the txt section first
+  //txt section is the encrypted data that needs to be decrypted.
+  //First pass prepares the encrypted txt section, xor with a rolling key - 8 bytes
+  //The second pass xors with the txt2 section, and uses the secdrv kernel key every 16 bytes
+  //Third pass will update the skew value as a result from the text section
   const int DECRYPTION_SIZE = 0x20; //pre-defined rdata:00428010
   const int DECRYPTION_VALUE = 0x9E3779B9; //pre-defined rdata:0042800C
   const int DECRYPTION_VALUE_START = DECRYPTION_VALUE << 5; // 0xC6EF3720
@@ -514,14 +481,17 @@ void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int size)
   const unsigned int string_val4 = *((int*)&encrypted_string[0x4]); //0x07060504
   const unsigned int string_val8 = *((int*)&encrypted_string[0x8]); //0x0B0A0908
   const unsigned int string_valC = *((int*)&encrypted_string[0xC]); //0x0C0D0E0F
-  
+
   unsigned int decryption_key = DECRYPTION_VALUE_START;
 
   int index = 0;
+  int text_index = 0;
+  unsigned int NextSkew = 0;
+  unsigned int size = info_txt.header.SizeOfRawData;
   char* decrypt_buffer = new char[size];
   memset(decrypt_buffer, 0, size);
 
-  iter_firstpass:
+iter_firstpass:
   const unsigned int init_val1 = *((int*)&info_txt.data[index + 0]);
   const unsigned int init_val2 = *((int*)&info_txt.data[index + 4]);
   unsigned int encrypted_val1 = init_val1;
@@ -537,7 +507,7 @@ void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int size)
     ival1 = ival1 ^ ival2;
 
     encrypted_val2 = encrypted_val2 - ival1;
-    
+
     unsigned int jval1 = (encrypted_val2 << 4) + string_val0;
     jval1 = jval1 ^ (encrypted_val2 + decryption_key);
     unsigned int jval2 = (encrypted_val2 >> 5) + string_val4;
@@ -554,18 +524,6 @@ void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int size)
   if (index < size)
     goto iter_firstpass;
 
-  /*
-  printf("Start: ");
-  for (int i = 0; i < size; ++i)
-    printf("%02X ", info_txt.data[i]);
-  printf("\n");
-
-  printf("Intermediate: ");
-  for (int i = 0; i < size; ++i)
-    printf("%02X ", decrypt_buffer[i] & 0xFF);
-  printf("\n");
-  */
-
   //0x421B38 - DecryptXORSections
   unsigned int decryption_skew = 0;
   for (int i = 0; i < size; ++i)
@@ -578,11 +536,33 @@ void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, unsigned int size)
     decryption_skew += decrypt_buffer[i] & 0xFF;
     if ((i + 1) % 0x10 == 0) //421DB9
       decryption_skew += 0x400; //dr7 result from secdrv driver
+    if ((i + 1) % 0x1000 == 0)
+    {
+      unsigned int starting_val = 0xFD379AB1;
+      //TODO: figure out size and info_text.data starting offset  ie text_index
+      //text_index is done via sectionDifference in CreateNextDecryptionSkewFromText:
+
+      //TODO: Not working
+      /*
+      for (unsigned short j = 0x4; j > 0; j--)
+      {
+        unsigned int v1 = info_text.data[text_index++] & 0xFF;
+        v1 = v1 * starting_val;
+        NextSkew += v1;
+        unsigned int v2 = starting_val * 0xA7753394;
+        starting_val = v2 + (j - 1) + 0x3BC62BB2;
+      }
+      decryption_skew = NextSkew;
+      */
+    }
   }
  
-  printf("Decrypted:\n");
-  for (int i = 0; i < size; ++i)
+  unsigned long vaddr = WIN32_PE_ENTRY + info_txt.header.VirtualAddress;
+  printf("Decryption 0x%08X - 0x%08X:\n", vaddr + showOffset, vaddr + showOffset + showSize);
+  for (unsigned int i = showOffset; i < (showOffset + showSize); ++i)
   {
+    if (i % 0x10 == 0)
+      printf("[%08X] ", vaddr + i);
     printf("%02X ", decrypt_buffer[i] & 0xFF);
     if ((i + 1) % 0x10 == 0)
       printf("\n");
