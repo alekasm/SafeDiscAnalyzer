@@ -50,8 +50,8 @@ void data_StringPatch(SectionInfo& info)
   }
   for (uint32_t offset : offsets2)
   {
-    //printf("Found .text at 0x%X\n", offset);
-    //memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
+    printf("Found .text at 0x%X\n", offset);
+    memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
   }
 }
 
@@ -485,7 +485,6 @@ void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_te
   unsigned int decryption_key = DECRYPTION_VALUE_START;
 
   int index = 0;
-  int text_index = 0;
   unsigned int NextSkew = 0;
   unsigned int size = info_txt.header.SizeOfRawData;
   char* decrypt_buffer = new char[size];
@@ -538,22 +537,33 @@ iter_firstpass:
       decryption_skew += 0x400; //dr7 result from secdrv driver
     if ((i + 1) % 0x1000 == 0)
     {
-      unsigned int starting_val = 0xFD379AB1;
+      
       //TODO: figure out size and info_text.data starting offset  ie text_index
       //text_index is done via sectionDifference in CreateNextDecryptionSkewFromText:
-
-      //TODO: Not working
-      /*
-      for (unsigned short j = 0x4; j > 0; j--)
+      NextSkew = 0;
+      unsigned int size_data = info_text.header.SizeOfRawData;
+      unsigned int text_index = 0;
+      while (size_data > 0)
       {
-        unsigned int v1 = info_text.data[text_index++] & 0xFF;
-        v1 = v1 * starting_val;
-        NextSkew += v1;
-        unsigned int v2 = starting_val * 0xA7753394;
-        starting_val = v2 + (j - 1) + 0x3BC62BB2;
+        unsigned int size_count = size_data;
+        if (size_count > 0x1000)
+          size_count = 0x1000;
+        //First iteration seems legit = 0x883A4AC
+        unsigned int starting_val = 0xFD379AB1;
+        for (unsigned short j = size_count; j > 0; j--)
+        {
+          unsigned int v1 = info_text.data[text_index++] & 0xFF;
+          v1 = v1 * starting_val;
+          NextSkew += v1;
+          unsigned int v2 = starting_val * 0xA7753394;
+          starting_val = v2 + (j - 1) + 0x3BC62BB2;
+        }
+        size_data -= size_count;
+        //printf("Next Skew: 0x%X\n", NextSkew);
       }
-      decryption_skew = NextSkew;
-      */
+      //printf("Final decryption skew: 0x%X\n", NextSkew);
+      decryption_skew += NextSkew;
+      
     }
   }
  

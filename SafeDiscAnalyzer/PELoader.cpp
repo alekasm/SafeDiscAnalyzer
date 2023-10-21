@@ -111,10 +111,10 @@ bool PELoader::LoadPEFile(const char* filepath)
   for (WORD i = 0; i < FH->NumberOfSections; ++i)
   {
     std::string name(reinterpret_cast<char const*>(SH[i].Name));
-    printf("%s: VA=%0X,RVA=%0X,PA=%0X,RDP=%0X,RSZ=%0X,VSZ=%0X\n",
+    printf("%s: VA=%0X,RVA=%0X,VSize=%0X,RDP=%0X,RSZ=%0X,VSZ=%0X\n",
       name.c_str(),
       SH[i].VirtualAddress, SH[i].VirtualAddress + WIN32_PE_ENTRY,
-      SH[i].Misc.PhysicalAddress,
+      SH[i].Misc.VirtualSize,
       SH[i].PointerToRawData,
       SH[i].SizeOfRawData,
       SH[i].Misc.VirtualSize);
