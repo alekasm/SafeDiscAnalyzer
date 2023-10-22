@@ -58,14 +58,16 @@ find:
   }
 }
 
-std::vector<uint32_t> Analyzer::FindSectionPattern(SectionInfo& info, const char* pattern, const char* mask)
+std::vector<uint32_t> Analyzer::FindSectionPattern(SectionInfo& info, const char* pattern, const char* mask, bool useVaddress)
 {
   DWORD offset = 0;
   std::vector<uint32_t> results;
   find:
   if (FindPattern(info.data, info.header.SizeOfRawData, pattern, mask, offset))
   {
-    uint32_t soffset = offset + info.header.VirtualAddress + 0x400000;
+    uint32_t soffset = offset;
+    if(useVaddress)
+      soffset += info.header.VirtualAddress + 0x400000;
     results.push_back(soffset);
     offset++;
     goto find;

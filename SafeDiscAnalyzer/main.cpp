@@ -53,7 +53,8 @@ int main(int argc, const char** argv)
 
 
   PELoader loader;
-  loader.LoadPEFile(argv[1]);
+  if (!loader.LoadPEFile(argv[1]))
+    return 0;
   for (const SectionInfo& section : loader.GetSections())
   {
     if (!section.initialized)
@@ -66,7 +67,7 @@ int main(int argc, const char** argv)
   if (decrypt)
   {
     Decrypt(loader.GetSections().at(2), loader.GetSections().at(1),
-      loader.GetSections().at(0), dOffset, dSize);
+      loader.GetSections().at(0), loader.GetSections().at(4), dOffset, dSize);
     return 0;
   }
 

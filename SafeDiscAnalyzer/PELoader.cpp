@@ -95,6 +95,7 @@ bool PELoader::LoadPEFile(const char* filepath)
 
   PIMAGE_FILE_HEADER FH = &NT->FileHeader;
   PIMAGE_OPTIONAL_HEADER OH = &NT->OptionalHeader;
+  IMAGE_DATA_DIRECTORY z = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
   if (OH->Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
   {
     printf("File is missing Optional Header signature\n");

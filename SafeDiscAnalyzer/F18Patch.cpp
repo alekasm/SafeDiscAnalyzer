@@ -413,17 +413,71 @@ void text_DisableDecryption(SectionInfo& info)
 }
 */
 
+struct RelocationData {
+  uint32_t size;
+  uint32_t offset;
+  uint32_t end_offset;
+  uint32_t entry;
+};
+
+bool FindRelocationTable(SectionInfo& info_reloc, uint32_t VirtualAddress, uint32_t VirtualSize, std::vector<RelocationData>* out = nullptr)
+{
+  //Search for Base Relocation Block, then add 0x8 for the entries
+  //TODO: actually walk the tables correctly
+  char buffer[8];
+  memset(buffer, 0, sizeof(buffer));
+  memcpy(&buffer[0], &VirtualAddress, 4);
+  buffer[4] = 0x60; //size
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info_reloc, buffer, "xxxxxxxx", false);
+  if (offsets.size() != 1)
+  {
+    printf("Failed to find relocation table for RVA: 0x%X\n", VirtualAddress);
+    return false;
+  }
+  uint32_t vsize = VirtualSize;
+  unsigned int table_offset = offsets.at(0);
+  uint32_t entry_va = 0;
+  uint32_t entry_size = 0;
+  unsigned int va_override = 0x44000;
+  uint32_t total_offset = 0;
+  while (vsize > 0)
+  {
+    memcpy(&entry_va, &info_reloc.data[table_offset], 4);
+    memcpy(&entry_size, &info_reloc.data[table_offset + 4], 4);
+    uint32_t data_size = vsize;
+    if (data_size > 0x1000)
+      data_size = 0x1000;
+    memcpy(&info_reloc.data[table_offset], &va_override, 4);
+    printf("Found relocation for 0x%X at 0x%X (0x%X)\n", entry_va, table_offset, table_offset + info_reloc.header.PointerToRawData);
+    if (out != nullptr)
+    {
+      RelocationData data;
+      data.size = entry_size - 8;
+      data.offset = table_offset;
+      data.end_offset = table_offset + entry_size;
+      data.entry = entry_va;
+      out->push_back(data);
+    }
+    vsize -= data_size;
+    va_override += data_size;
+    table_offset += entry_size;
+    total_offset += entry_size;
+  }
+  return true;
+}
+
 
 void ApplyF18Patches(PELoader& loader, bool magic)
 {
   const std::string text(".text");
   const std::string txt2(".txt2");
   const std::string data(".data");
+  const std::string reloc(".reloc");
   for (SectionInfo& section : loader.GetSections())
   {
     if (text.compare(section.name) == 0)
     {
-      //text_ApplyFauxCDCheckPatch(section);
+      text_ApplyFauxCDCheckPatch(section);
       if (!magic)
       {
         text_CanOpenSecdrvPatch(section);
@@ -460,11 +514,22 @@ void ApplyF18Patches(PELoader& loader, bool magic)
     {
       data_StringPatch(section);
     }
+    else if (reloc.compare(section.name) == 0)
+    {
+      FindRelocationTable(section, 0xC000, 0x12A00);
+    }
   }
 }
 
-void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_text, int showOffset, int showSize)
+void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_text,
+  SectionInfo& info_reloc, int showOffset, int showSize)
 {
+  std::vector<RelocationData> reloc_data;
+  uint32_t reloc_table = FindRelocationTable(info_reloc, info_text.header.VirtualAddress, info_text.header.Misc.VirtualSize, &reloc_data);
+  if (reloc_table == 0) return;
+  printf("Found relocation table at: 0x%X\n", reloc_table);
+
+
   //txt section is the encrypted data that needs to be decrypted.
   //First pass prepares the encrypted txt section, xor with a rolling key - 8 bytes
   //The second pass xors with the txt2 section, and uses the secdrv kernel key every 16 bytes
@@ -541,16 +606,53 @@ iter_firstpass:
       //TODO: figure out size and info_text.data starting offset  ie text_index
       //text_index is done via sectionDifference in CreateNextDecryptionSkewFromText:
       NextSkew = 0;
-      unsigned int size_data = info_text.header.SizeOfRawData;
+      int size_data = info_text.header.SizeOfRawData;
       unsigned int text_index = 0;
+      int reloc_index = 0;
+      reloc_table = reloc_data.at(reloc_index).offset + 8;
+      unsigned int table_index = reloc_table;
+      unsigned short last_index = 0;
       while (size_data > 0)
       {
-        unsigned int size_count = size_data;
-        if (size_count > 0x1000)
-          size_count = 0x1000;
-        //First iteration seems legit = 0x883A4AC
+        unsigned short index_entry;
+        memcpy(&index_entry, &info_reloc.data[table_index], 2);
+        unsigned short index_offset = index_entry & 0xFFF;
+        unsigned short index_end = index_entry >> 0xC;
+        if(index_end)
+        switch (index_end)
+        {
+        case 1:
+        case 2:
+          index_end = last_index + 2;
+          break;
+        case 3:
+        case 4:
+        case 5:
+          index_end = last_index + 4;
+          break;
+        default:
+          index_end = last_index + 0;
+        }
+        unsigned int size_count = index_offset;
+        size_count =  size_count - index_end;
+        if (size_count <= 0)
+          size_count = index_offset;
+        printf("[0x%X] index: 0x%X, size offset: 0x%X, index_end:0x%X\n", table_index, index_offset, size_count, index_end);
+        last_index = index_offset;
+        table_index = table_index + 2;
+        if (table_index == reloc_data.at(reloc_index).end_offset)
+        {
+          reloc_table = reloc_data.at(++reloc_index).offset + 8;
+          printf("Switching to new table (%d): 0x%X\n", reloc_index, reloc_data.at(reloc_index).entry);
+          table_index = reloc_table;
+          last_index = 0;
+        }
+       // unsigned int size_count = size_data;
+       // if (size_count > 0x1000)
+       //   size_count = 0x1000;
         unsigned int starting_val = 0xFD379AB1;
-        for (unsigned short j = size_count; j > 0; j--)
+        unsigned int text_index = index_end == size_count ? 0 : index_end;
+        for (unsigned int j = size_count; j > 0; j--)
         {
           unsigned int v1 = info_text.data[text_index++] & 0xFF;
           v1 = v1 * starting_val;
@@ -559,11 +661,15 @@ iter_firstpass:
           starting_val = v2 + (j - 1) + 0x3BC62BB2;
         }
         size_data -= size_count;
-        //printf("Next Skew: 0x%X\n", NextSkew);
+        printf("Next Skew: 0x%X\n", NextSkew);
+        if (NextSkew == 0x2D813BF9)
+        {
+          printf("foiund....\n");
+          getchar();
+        }
       }
-      //printf("Final decryption skew: 0x%X\n", NextSkew);
+      printf("Final decryption skew: 0x%X\n", NextSkew);
       decryption_skew += NextSkew;
-      
     }
   }
  

@@ -36,7 +36,7 @@ struct PELoader
 private:
   std::vector<SectionInfo> sections = {
     SectionInfo(".text", ".tex2", TRUE), SectionInfo(".txt2", ".txt3", TRUE),
-    SectionInfo(".txt"), SectionInfo(".data")
+    SectionInfo(".txt"), SectionInfo(".data"), SectionInfo(".reloc")
   };
 };
 

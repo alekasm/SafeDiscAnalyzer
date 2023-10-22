@@ -8,5 +8,5 @@ struct Analyzer
 {
   static void PatchSafeDiscAntiDisassembler(SectionInfo& info);
   static bool CreateMD5Hash(std::string filename, std::string& out_hash);
-  static std::vector<uint32_t> FindSectionPattern(SectionInfo&, const char* pattern, const char* mask);
+  static std::vector<uint32_t> FindSectionPattern(SectionInfo&, const char* pattern, const char* mask, bool useVaddress = true);
 };
