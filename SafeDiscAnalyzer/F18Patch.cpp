@@ -3,7 +3,7 @@
 #define TXT2_SECTION 0x41F000
 #define TEXT_SECTION 0x40C000
 #define DATA_SECTION 0x429000
-
+//#define DEBUGGING_ENABLED
 //42A9D8 = ReadProcessMemory
 //42A9F0 = WriteProcessMemory
 //42AA08 = VirtualProtect
@@ -521,14 +521,170 @@ void ApplyF18Patches(PELoader& loader, bool magic)
   }
 }
 
+int Layer3RelocationDecryption(SectionInfo& info_text, SectionInfo& info_reloc)
+{
+  std::vector<RelocationData> reloc_data;
+  bool reloc_table = FindRelocationTable(info_reloc, info_text.header.VirtualAddress,
+    info_text.header.Misc.VirtualSize, &reloc_data);
+  if (!reloc_table) return 0;
+
+  int NextSkew = 0;
+  int size_data = info_text.header.SizeOfRawData;
+  unsigned int text_index = 0;
+  int reloc_index = 0;
+  reloc_table = reloc_data.at(reloc_index).offset + 8;
+  unsigned int table_index = reloc_table;
+  unsigned short last_index = 0;
+  unsigned int size_data_iter = size_data;
+  unsigned int text_offset = 0;
+  bool last_index_override = false;
+  if (size_data_iter > 0x1000)
+    size_data_iter = 0x1000;
+  while (size_data > 0)
+  {
+    //Function:0x4136A0
+    unsigned short index_entry;
+    memcpy(&index_entry, &info_reloc.data[table_index], 2);
+    unsigned short index_upper = index_entry >> 0xC;
+    unsigned short next_index = index_entry & 0xFFF;
+    unsigned int current_index = 0;
+    switch (index_upper)
+    {
+    case 1:
+    case 2:
+      current_index = last_index + 2;
+      break;
+    case 3:
+    case 4:
+    case 5:
+      current_index = last_index + 4;
+      break;
+    default:
+      current_index = last_index + 0;
+    }
+    unsigned int size_count = next_index;
+    unsigned int text_index = 0;
+    if (current_index == last_index)
+      current_index += 4;
+    if (last_index > 0 || last_index_override)
+    {
+      size_count = size_count - current_index;
+      text_index = current_index;
+      last_index_override = false;
+    }
+    else
+    {
+      text_index = 0;
+    }
+    text_index += text_offset;
+
+    if (next_index == 0)
+    {
+      size_count = ((size_data_iter - 1) - current_index) + 1;
+    }
+
+#ifdef DEBUGGING_ENABLED
+    printf("[0x%X] entry<0x%X,0x%X> Decrypting 0x%X with size of 0x%X, ending: 0x%X, last=0x%X, current = 0x%X\n",
+      table_index + info_reloc.header.PointerToRawData,
+      next_index, index_upper,
+      current_index, size_count, next_index,
+      last_index, current_index);
+    fflush(stdout);
+#endif
+
+    if (last_index == 0 && next_index == 0)
+    {
+#ifdef DEBUGGING_ENABLED
+      printf("Skipped - likely starting new page on zero offset\n");
+      fflush(stdout);
+#endif
+      current_index = 0;
+      table_index = table_index + 2;
+      last_index_override = true;
+      continue;
+    }
+    last_index = next_index;
+
+    if (next_index == 0)
+    {
+      if (size_data - size_data_iter > 0)
+      {
+        reloc_table = reloc_data.at(++reloc_index).offset + 8;
+#ifdef DEBUGGING_ENABLED
+        printf("Switching to new table (%d): 0x%X\n", reloc_index, reloc_data.at(reloc_index).entry);
+        fflush(stdout);
+#endif
+      }
+
+      table_index = reloc_table;
+      last_index = 0;
+      size_data -= size_data_iter;
+      unsigned int old_iter = size_data_iter;
+      if (size_data > 0x1000)
+        size_data_iter = 0x1000;
+      else
+        size_data_iter = size_data;
+#ifdef DEBUGGING_ENABLED
+      printf("size remaining: 0x%X, iter: 0x%X\n", size_data, size_data_iter);
+      fflush(stdout);
+#endif
+      text_offset += old_iter;
+    }
+    else
+    {
+      table_index = table_index + 2;
+    }
+
+    if (size_count == 0)
+    {
+#ifdef DEBUGGING_ENABLED
+      printf("Size is zero - skipping\n");
+      fflush(stdout);
+#endif
+      continue;
+    }
+
+    unsigned int starting_val = 0xFD379AB1;
+    for (unsigned int j = size_count; j > 0; j--)
+    {
+      unsigned int v1 = info_text.data[text_index++] & 0xFF;
+      v1 = v1 * starting_val;
+      NextSkew += v1;
+      unsigned int v2 = starting_val * 0xA7753394;
+      starting_val = v2 + (j - 1) + 0x3BC62BB2;
+    }
+#ifdef DEBUGGING_ENABLED
+    printf("Next Skew: 0x%X\n", NextSkew);
+    fflush(stdout);
+#endif
+  }
+  printf("Final decryption skew: 0x%X\n", NextSkew);
+  fflush(stdout);
+  return NextSkew;
+}
+
 void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_text,
   SectionInfo& info_reloc, int showOffset, int showSize)
 {
+
+  //TODO:
+  /*
+  int RelocationSkew = Layer3RelocationDecryption(info_text, info_reloc);
+  if (RelocationSkew == 0)
+  {
+    printf("Failed to decrypt\n");
+    return;
+  }
+  printf("Relocation Skew: 0x%X\n", RelocationSkew);
+  return;
+  */
+
   std::vector<RelocationData> reloc_data;
   uint32_t reloc_table = FindRelocationTable(info_reloc, info_text.header.VirtualAddress, info_text.header.Misc.VirtualSize, &reloc_data);
   if (reloc_table == 0) return;
-  printf("Found relocation table at: 0x%X\n", reloc_table);
 
+
+  //0x2D813BF9
 
   //txt section is the encrypted data that needs to be decrypted.
   //First pass prepares the encrypted txt section, xor with a rolling key - 8 bytes
@@ -615,12 +771,10 @@ iter_firstpass:
       unsigned int size_data_iter = size_data;
       unsigned int text_offset = 0;
       bool last_index_override = false;
-      //int total_iterations = 0;
       if (size_data_iter > 0x1000)
         size_data_iter = 0x1000;
       while (size_data > 0)
       {
-        //++total_iterations;
         //Function:0x4136A0
         unsigned short index_entry;
         memcpy(&index_entry, &info_reloc.data[table_index], 2);
@@ -641,9 +795,8 @@ iter_firstpass:
         default:
           current_index = last_index + 0;
         }
-        unsigned int size_count = next_index; //DC
+        unsigned int size_count = next_index;
         unsigned int text_index = 0;
-        //unsigned int text_index = 0;
         if (current_index == last_index)
           current_index += 4;
         if (last_index > 0 || last_index_override)
@@ -663,43 +816,39 @@ iter_firstpass:
             size_count = ((size_data_iter - 1) - current_index) + 1;
         }
 
-
-        //TODO: is this needed?
-        //if (size_count == next_index)
-        //  size_count = 0;
-        //[0x3B534] entry<0x0,0xD> Decrypting 0xFFD with size of 0x3, ending: 0x0, last=0xFF9, current = 0xFFD
-       //[0x3B7D2] entry<0x0,0x0> Decrypting 0xFC0 with size of 0x40, ending: 0x0, last=0xFBC, current = 0xFC0
-        //[0x3B910] entry<0x0,0x3> Decrypting 0x4 with size of 0xFFC, ending: 0x0, last=0x0, current = 0x4
-        
-        //[0x3B910] entry<0x0, 0x3> Decrypting 0x4 with size of 0xFFC, ending: 0x0, last = 0x0, current = 0x4
-        //  Skipped - likely starting new page on zero offset
-        //  [0x3B912] entry<0x60, 0x3> Decrypting 0x4 with size of 0x60, ending : 0x60, last = 0x0, current = 0x4
-        
+#ifdef DEBUGGING_ENABLED
         printf("[0x%X] entry<0x%X,0x%X> Decrypting 0x%X with size of 0x%X, ending: 0x%X, last=0x%X, current = 0x%X\n",
           table_index + info_reloc.header.PointerToRawData,
           next_index, index_upper,
           current_index, size_count, next_index,
           last_index, current_index);
         fflush(stdout);
-          
+#endif
 
         if (last_index == 0 && next_index == 0)
         {
+#ifdef DEBUGGING_ENABLED
           printf("Skipped - likely starting new page on zero offset\n");
           fflush(stdout);
+#endif
           current_index = 0;
           table_index = table_index + 2;
           last_index_override = true;
           continue;
         }
-
         last_index = next_index;
 
         if(next_index == 0)
         {
-          reloc_table = reloc_data.at(++reloc_index).offset + 8;
-          printf("Switching to new table (%d): 0x%X\n", reloc_index, reloc_data.at(reloc_index).entry);
-          fflush(stdout);
+          if (size_data - size_data_iter > 0)
+          {
+            reloc_table = reloc_data.at(++reloc_index).offset + 8;
+#ifdef DEBUGGING_ENABLED
+            printf("Switching to new table (%d): 0x%X\n", reloc_index, reloc_data.at(reloc_index).entry);
+            fflush(stdout);
+#endif
+          }
+
           table_index = reloc_table;
           last_index = 0;
           size_data -= size_data_iter;
@@ -708,16 +857,10 @@ iter_firstpass:
             size_data_iter = 0x1000;
           else
             size_data_iter = size_data;
-          /*
-          if (size_data_iter <= 0)
-          {
-            size_data_iter = size_data;
-            if (size_data_iter > 0x1000)
-              size_data_iter = 0x1000;
-          }
-          */
+#ifdef DEBUGGING_ENABLED
           printf("size remaining: 0x%X, iter: 0x%X\n", size_data, size_data_iter);
           fflush(stdout);
+#endif
           text_offset += old_iter;
         }
         else
@@ -727,13 +870,14 @@ iter_firstpass:
 
         if (size_count == 0)
         {
+#ifdef DEBUGGING_ENABLED
           printf("Size is zero - skipping\n");
           fflush(stdout);
+#endif
           continue;
         }
+
         unsigned int starting_val = 0xFD379AB1;
-        //text index now equals a4c
-       
         for (unsigned int j = size_count; j > 0; j--)
         {
           unsigned int v1 = info_text.data[text_index++] & 0xFF;
@@ -742,8 +886,10 @@ iter_firstpass:
           unsigned int v2 = starting_val * 0xA7753394;
           starting_val = v2 + (j - 1) + 0x3BC62BB2;
         }
+#ifdef DEBUGGING_ENABLED
         printf("Next Skew: 0x%X\n", NextSkew);
         fflush(stdout);
+#endif
       }
       printf("Final decryption skew: 0x%X\n", NextSkew);
       fflush(stdout);
