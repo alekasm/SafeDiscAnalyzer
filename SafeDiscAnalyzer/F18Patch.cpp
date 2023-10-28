@@ -612,46 +612,128 @@ iter_firstpass:
       reloc_table = reloc_data.at(reloc_index).offset + 8;
       unsigned int table_index = reloc_table;
       unsigned short last_index = 0;
+      unsigned int size_data_iter = size_data;
+      unsigned int text_offset = 0;
+      bool last_index_override = false;
+      //int total_iterations = 0;
+      if (size_data_iter > 0x1000)
+        size_data_iter = 0x1000;
       while (size_data > 0)
       {
+        //++total_iterations;
+        //Function:0x4136A0
         unsigned short index_entry;
         memcpy(&index_entry, &info_reloc.data[table_index], 2);
-        unsigned short index_offset = index_entry & 0xFFF;
-        unsigned short index_end = index_entry >> 0xC;
-        if(index_end)
-        switch (index_end)
+        unsigned short index_upper = index_entry >> 0xC;
+        unsigned short next_index = index_entry & 0xFFF;
+        unsigned int current_index = 0;
+        switch (index_upper)
         {
         case 1:
         case 2:
-          index_end = last_index + 2;
+          current_index = last_index + 2;
           break;
         case 3:
         case 4:
         case 5:
-          index_end = last_index + 4;
+          current_index = last_index + 4;
           break;
         default:
-          index_end = last_index + 0;
+          current_index = last_index + 0;
         }
-        unsigned int size_count = index_offset;
-        size_count =  size_count - index_end;
-        if (size_count <= 0)
-          size_count = index_offset;
-        printf("[0x%X] index: 0x%X, size offset: 0x%X, index_end:0x%X\n", table_index, index_offset, size_count, index_end);
-        last_index = index_offset;
-        table_index = table_index + 2;
-        if (table_index == reloc_data.at(reloc_index).end_offset)
+        unsigned int size_count = next_index; //DC
+        unsigned int text_index = 0;
+        //unsigned int text_index = 0;
+        if (current_index == last_index)
+          current_index += 4;
+        if (last_index > 0 || last_index_override)
+        {
+          size_count = size_count - current_index;
+          text_index = current_index;
+          last_index_override = false;
+        }
+        else
+        {
+          text_index = 0;
+        }
+        text_index += text_offset;
+
+        if (next_index == 0)
+        {
+            size_count = ((size_data_iter - 1) - current_index) + 1;
+        }
+
+
+        //TODO: is this needed?
+        //if (size_count == next_index)
+        //  size_count = 0;
+        //[0x3B534] entry<0x0,0xD> Decrypting 0xFFD with size of 0x3, ending: 0x0, last=0xFF9, current = 0xFFD
+       //[0x3B7D2] entry<0x0,0x0> Decrypting 0xFC0 with size of 0x40, ending: 0x0, last=0xFBC, current = 0xFC0
+        //[0x3B910] entry<0x0,0x3> Decrypting 0x4 with size of 0xFFC, ending: 0x0, last=0x0, current = 0x4
+        
+        //[0x3B910] entry<0x0, 0x3> Decrypting 0x4 with size of 0xFFC, ending: 0x0, last = 0x0, current = 0x4
+        //  Skipped - likely starting new page on zero offset
+        //  [0x3B912] entry<0x60, 0x3> Decrypting 0x4 with size of 0x60, ending : 0x60, last = 0x0, current = 0x4
+        
+        printf("[0x%X] entry<0x%X,0x%X> Decrypting 0x%X with size of 0x%X, ending: 0x%X, last=0x%X, current = 0x%X\n",
+          table_index + info_reloc.header.PointerToRawData,
+          next_index, index_upper,
+          current_index, size_count, next_index,
+          last_index, current_index);
+        fflush(stdout);
+          
+
+        if (last_index == 0 && next_index == 0)
+        {
+          printf("Skipped - likely starting new page on zero offset\n");
+          fflush(stdout);
+          current_index = 0;
+          table_index = table_index + 2;
+          last_index_override = true;
+          continue;
+        }
+
+        last_index = next_index;
+
+        if(next_index == 0)
         {
           reloc_table = reloc_data.at(++reloc_index).offset + 8;
           printf("Switching to new table (%d): 0x%X\n", reloc_index, reloc_data.at(reloc_index).entry);
+          fflush(stdout);
           table_index = reloc_table;
           last_index = 0;
+          size_data -= size_data_iter;
+          unsigned int old_iter = size_data_iter;
+          if (size_data > 0x1000)
+            size_data_iter = 0x1000;
+          else
+            size_data_iter = size_data;
+          /*
+          if (size_data_iter <= 0)
+          {
+            size_data_iter = size_data;
+            if (size_data_iter > 0x1000)
+              size_data_iter = 0x1000;
+          }
+          */
+          printf("size remaining: 0x%X, iter: 0x%X\n", size_data, size_data_iter);
+          fflush(stdout);
+          text_offset += old_iter;
         }
-       // unsigned int size_count = size_data;
-       // if (size_count > 0x1000)
-       //   size_count = 0x1000;
+        else
+        {
+          table_index = table_index + 2;
+        }
+
+        if (size_count == 0)
+        {
+          printf("Size is zero - skipping\n");
+          fflush(stdout);
+          continue;
+        }
         unsigned int starting_val = 0xFD379AB1;
-        unsigned int text_index = index_end == size_count ? 0 : index_end;
+        //text index now equals a4c
+       
         for (unsigned int j = size_count; j > 0; j--)
         {
           unsigned int v1 = info_text.data[text_index++] & 0xFF;
@@ -660,15 +742,11 @@ iter_firstpass:
           unsigned int v2 = starting_val * 0xA7753394;
           starting_val = v2 + (j - 1) + 0x3BC62BB2;
         }
-        size_data -= size_count;
         printf("Next Skew: 0x%X\n", NextSkew);
-        if (NextSkew == 0x2D813BF9)
-        {
-          printf("foiund....\n");
-          getchar();
-        }
+        fflush(stdout);
       }
       printf("Final decryption skew: 0x%X\n", NextSkew);
+      fflush(stdout);
       decryption_skew += NextSkew;
     }
   }
