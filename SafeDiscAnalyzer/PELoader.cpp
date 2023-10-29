@@ -150,7 +150,7 @@ bool PELoader::LoadPEFile(const char* filepath)
         section_copy = info.copy;
       }
       if (!section_copy)
-        break;
+        continue;
       //Make an assumption that the last entry is also the last virtually for data
       WORD EndIndex = FH->NumberOfSections - 1;
       WORD NewIndex = FH->NumberOfSections;
