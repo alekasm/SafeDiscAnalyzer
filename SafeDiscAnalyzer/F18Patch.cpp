@@ -163,10 +163,9 @@ void txt2_AddMagicSkewValuePatch(SectionInfo& info)
   {
     printf("Expected to find one result for AddMagicSkewValue\n");
     return;
-  }
-  printf("Found AddMagicSkewValue at 0x%X\n", offsets.at(0));
+  }  
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  
+  printf("Found AddMagicSkewValue at 0x%X (0x%X)\n", offsets.at(0), sectionOffset);
   size_t start = sectionOffset + 0x13;
   int DecryptionValueWithSkew;
   memcpy(&DecryptionValueWithSkew, &info.data[sectionOffset - 0xD], 4);
@@ -420,25 +419,29 @@ struct RelocationData {
   uint32_t entry;
 };
 
-bool FindRelocationTable(SectionInfo& info_reloc, uint32_t VirtualAddress, uint32_t VirtualSize, std::vector<RelocationData>* out = nullptr)
+bool FindRelocationTable(SectionInfo& info_reloc, SectionInfo& info_text, std::vector<RelocationData>* out = nullptr)
 {
   //Search for Base Relocation Block, then add 0x8 for the entries
   //TODO: actually walk the tables correctly
-  char buffer[8];
+
+  uint32_t VirtualAddress = info_text.VirtualAddress - WIN32_PE_ENTRY;
+  uint32_t VirtualSize = info_text.header.Misc.VirtualSize;
+  uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - WIN32_PE_ENTRY;
+  char buffer[4];
   memset(buffer, 0, sizeof(buffer));
   memcpy(&buffer[0], &VirtualAddress, 4);
-  buffer[4] = 0x60; //size
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info_reloc, buffer, "xxxxxxxx", false);
-  if (offsets.size() != 1)
+  //buffer[4] = 0x60; //size also changes...
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info_reloc, buffer, "xxxx", false);
+  if (offsets.size() == 0)
   {
-    printf("Failed to find relocation table for RVA: 0x%X\n", VirtualAddress);
+    printf("Failed to find relocation table for RVA: 0x%X (results=%d)\n", VirtualAddress, offsets.size());
     return false;
   }
   uint32_t vsize = VirtualSize;
   unsigned int table_offset = offsets.at(0);
   uint32_t entry_va = 0;
   uint32_t entry_size = 0;
-  unsigned int va_override = 0x44000;
+  unsigned int va_override = VirtualAddressCopy;
   uint32_t total_offset = 0;
   while (vsize > 0)
   {
@@ -469,15 +472,13 @@ bool FindRelocationTable(SectionInfo& info_reloc, uint32_t VirtualAddress, uint3
 
 void ApplyF18Patches(PELoader& loader, bool magic)
 {
-  const std::string text(".text");
-  const std::string txt2(".txt2");
-  const std::string data(".data");
-  const std::string reloc(".reloc");
-  for (SectionInfo& section : loader.GetSections())
+  SectionMap::iterator it = loader.GetSectionMap().begin();
+  for (; it != loader.GetSectionMap().end(); ++it)
   {
-    if (text.compare(section.name) == 0)
+    SectionInfo& section = it->second;
+    if (it->first == SectionType::TEXT)
     {
-      text_ApplyFauxCDCheckPatch(section);
+      //text_ApplyFauxCDCheckPatch(section);
       if (!magic)
       {
         text_CanOpenSecdrvPatch(section);
@@ -485,11 +486,9 @@ void ApplyF18Patches(PELoader& loader, bool magic)
         text_TickCountLowPatch(section);
         text_SecdrvStatusMessagePatch(section);
       }
-      
     }
-    else if (txt2.compare(section.name) == 0)
+    else if (it->first == SectionType::TXT2)
     {
-
       if (magic)
       {
         txt2_AddMagicSkewValuePatch(section);
@@ -502,170 +501,26 @@ void ApplyF18Patches(PELoader& loader, bool magic)
         txt2_CheckKernel32BreakpointPatch(section);
       }
 
-
       txt2_ApplyInterruptDebugPatch(section);
       txt2_drvmgtPatch(section);
       txt2_SoftICEDebuggerCheck(section);
       txt2_NTQueryProcessInformationPatch(section);
-
-
     }
-    else if (data.compare(section.name) == 0)
+    else if (it->first == SectionType::DATA)
     {
       data_StringPatch(section);
     }
-    else if (reloc.compare(section.name) == 0)
+    else if (it->first == SectionType::RELOC)
     {
-      FindRelocationTable(section, 0xC000, 0x12A00);
+
+      FindRelocationTable(section, loader.GetSectionMap().at(SectionType::TEXT));
     }
   }
 }
 
-int Layer3RelocationDecryption(SectionInfo& info_text, SectionInfo& info_reloc)
+void Decrypt(PELoader& loader, int showOffset, int showSize)
 {
-  std::vector<RelocationData> reloc_data;
-  bool reloc_table = FindRelocationTable(info_reloc, info_text.header.VirtualAddress,
-    info_text.header.Misc.VirtualSize, &reloc_data);
-  if (!reloc_table) return 0;
-
-  int NextSkew = 0;
-  int size_data = info_text.header.SizeOfRawData;
-  unsigned int text_index = 0;
-  int reloc_index = 0;
-  reloc_table = reloc_data.at(reloc_index).offset + 8;
-  unsigned int table_index = reloc_table;
-  unsigned short last_index = 0;
-  unsigned int size_data_iter = size_data;
-  unsigned int text_offset = 0;
-  bool last_index_override = false;
-  if (size_data_iter > 0x1000)
-    size_data_iter = 0x1000;
-  while (size_data > 0)
-  {
-    //Function:0x4136A0
-    unsigned short index_entry;
-    memcpy(&index_entry, &info_reloc.data[table_index], 2);
-    unsigned short index_upper = index_entry >> 0xC;
-    unsigned short next_index = index_entry & 0xFFF;
-    unsigned int current_index = 0;
-    switch (index_upper)
-    {
-    case 1:
-    case 2:
-      current_index = last_index + 2;
-      break;
-    case 3:
-    case 4:
-    case 5:
-      current_index = last_index + 4;
-      break;
-    default:
-      current_index = last_index + 0;
-    }
-    unsigned int size_count = next_index;
-    unsigned int text_index = 0;
-    if (current_index == last_index)
-      current_index += 4;
-    if (last_index > 0 || last_index_override)
-    {
-      size_count = size_count - current_index;
-      text_index = current_index;
-      last_index_override = false;
-    }
-    else
-    {
-      text_index = 0;
-    }
-    text_index += text_offset;
-
-    if (next_index == 0)
-    {
-      size_count = ((size_data_iter - 1) - current_index) + 1;
-    }
-
-#ifdef DEBUGGING_ENABLED
-    printf("[0x%X] entry<0x%X,0x%X> Decrypting 0x%X with size of 0x%X, ending: 0x%X, last=0x%X, current = 0x%X\n",
-      table_index + info_reloc.header.PointerToRawData,
-      next_index, index_upper,
-      current_index, size_count, next_index,
-      last_index, current_index);
-    fflush(stdout);
-#endif
-
-    if (last_index == 0 && next_index == 0)
-    {
-#ifdef DEBUGGING_ENABLED
-      printf("Skipped - likely starting new page on zero offset\n");
-      fflush(stdout);
-#endif
-      current_index = 0;
-      table_index = table_index + 2;
-      last_index_override = true;
-      continue;
-    }
-    last_index = next_index;
-
-    if (next_index == 0)
-    {
-      if (size_data - size_data_iter > 0)
-      {
-        reloc_table = reloc_data.at(++reloc_index).offset + 8;
-#ifdef DEBUGGING_ENABLED
-        printf("Switching to new table (%d): 0x%X\n", reloc_index, reloc_data.at(reloc_index).entry);
-        fflush(stdout);
-#endif
-      }
-
-      table_index = reloc_table;
-      last_index = 0;
-      size_data -= size_data_iter;
-      unsigned int old_iter = size_data_iter;
-      if (size_data > 0x1000)
-        size_data_iter = 0x1000;
-      else
-        size_data_iter = size_data;
-#ifdef DEBUGGING_ENABLED
-      printf("size remaining: 0x%X, iter: 0x%X\n", size_data, size_data_iter);
-      fflush(stdout);
-#endif
-      text_offset += old_iter;
-    }
-    else
-    {
-      table_index = table_index + 2;
-    }
-
-    if (size_count == 0)
-    {
-#ifdef DEBUGGING_ENABLED
-      printf("Size is zero - skipping\n");
-      fflush(stdout);
-#endif
-      continue;
-    }
-
-    unsigned int starting_val = 0xFD379AB1;
-    for (unsigned int j = size_count; j > 0; j--)
-    {
-      unsigned int v1 = info_text.data[text_index++] & 0xFF;
-      v1 = v1 * starting_val;
-      NextSkew += v1;
-      unsigned int v2 = starting_val * 0xA7753394;
-      starting_val = v2 + (j - 1) + 0x3BC62BB2;
-    }
-#ifdef DEBUGGING_ENABLED
-    printf("Next Skew: 0x%X\n", NextSkew);
-    fflush(stdout);
-#endif
-  }
-  printf("Final decryption skew: 0x%X\n", NextSkew);
-  fflush(stdout);
-  return NextSkew;
-}
-
-void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_text,
-  SectionInfo& info_reloc, int showOffset, int showSize)
-{
+  //SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_text, SectionInfo& info_reloc
 
   //TODO:
   /*
@@ -679,8 +534,13 @@ void Decrypt(SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_te
   return;
   */
 
+  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELOC);
+  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
+  SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
+  SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
+
   std::vector<RelocationData> reloc_data;
-  uint32_t reloc_table = FindRelocationTable(info_reloc, info_text.header.VirtualAddress, info_text.header.Misc.VirtualSize, &reloc_data);
+  uint32_t reloc_table = FindRelocationTable(info_reloc, info_text, &reloc_data);
   if (reloc_table == 0) return;
 
 
@@ -891,8 +751,10 @@ iter_firstpass:
         fflush(stdout);
 #endif
       }
+#ifdef DEBUGGING_ENABLED
       printf("Final decryption skew: 0x%X\n", NextSkew);
       fflush(stdout);
+#endif
       decryption_skew += NextSkew;
     }
   }

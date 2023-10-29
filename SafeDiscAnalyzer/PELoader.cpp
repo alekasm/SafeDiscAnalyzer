@@ -1,5 +1,29 @@
 #include "PELoader.h"
 
+void PELoader::Destroy()
+{
+  SectionMap::iterator it = sectionMap.begin();
+  for (; it != sectionMap.end(); ++it)
+  {
+    delete it->second.data;
+  }
+}
+
+bool PELoader::FoundAllSections()
+{
+  SectionMap::const_iterator it = sectionMap.begin();
+  bool found_all = true;
+  for (; it != sectionMap.end(); ++it)
+  {
+    if (!it->second.initialized)
+    {
+      printf("Failed to find %s section\n", it->second.name);
+      found_all = false;
+    }
+  }
+  return found_all;
+}
+
 bool PELoader::PatchPEFile(const char* filepath)
 {
   std::string name(filepath);
@@ -12,8 +36,11 @@ bool PELoader::PatchPEFile(const char* filepath)
     printf("Failed to CreateFile %s with error code: %d\n", name.c_str(), GetLastError());
     return false;
   }
-  for (const SectionInfo& info : sections)
+
+  SectionMap::const_iterator it= sectionMap.begin();
+  for (; it != sectionMap.end(); ++it)
   {
+    const SectionInfo& info = it->second;
     DWORD dwPtr = SetFilePointer(hFile, info.header.PointerToRawData, NULL, FILE_BEGIN);
     if (dwPtr == INVALID_SET_FILE_POINTER) // Test for failure
     {
@@ -28,21 +55,12 @@ bool PELoader::PatchPEFile(const char* filepath)
       return false;
     }
   }
+
   CloseHandle(hFile);
   printf("Wrote to file: %s\n", name.c_str());
   return true;
 }
 
-bool PELoader::GetSectionInfo(std::string name, SectionInfo* out)
-{
-  for (SectionInfo& info : sections)
-    if (name.compare(info.name) == 0)
-    {
-      out = &info;
-      return true;
-    }
-  return false;
-}
 
 DWORD align(DWORD addr, DWORD align)
 {
@@ -120,20 +138,19 @@ bool PELoader::LoadPEFile(const char* filepath)
       SH[i].SizeOfRawData,
       SH[i].Misc.VirtualSize);
 
-    const char* section_name = NULL;
-    const char* section_copy = NULL;
-    for (SectionInfo& info : sections)
+    SectionMap::iterator it_copy = sectionMap.begin();
+    for (; it_copy != sectionMap.end(); ++it_copy)
     {
+      const char* section_name = NULL;
+      const char* section_copy = NULL;
+      SectionInfo& info = it_copy->second;
       if (info.copy != NULL && name.compare(info.name) == 0)
       {
         section_name = info.name;
         section_copy = info.copy;
-        break;
       }
-    }
-    
-    if (section_copy)
-    {
+      if (!section_copy)
+        break;
       //Make an assumption that the last entry is also the last virtually for data
       WORD EndIndex = FH->NumberOfSections - 1;
       WORD NewIndex = FH->NumberOfSections;
@@ -156,10 +173,11 @@ bool PELoader::LoadPEFile(const char* filepath)
       PBYTE buffer = new BYTE[SH[NewIndex].SizeOfRawData];
       ZeroMemory(buffer, SH[NewIndex].SizeOfRawData);
       DWORD bytesRead;
-     
+
       printf("Copying %s (Offset: 0x%X, VA:0x%X) section to %s (Offset:0x%X, VA:0x%X)\n",
         SH[i].Name, SH[i].PointerToRawData, SH[i].VirtualAddress + WIN32_PE_ENTRY,
         SH[NewIndex].Name, SH[NewIndex].PointerToRawData, SH[NewIndex].VirtualAddress + WIN32_PE_ENTRY);
+      it_copy->second.VirtualAddressCopy = SH[NewIndex].VirtualAddress + WIN32_PE_ENTRY;
 
       SetFilePointer(hFile, SH[i].PointerToRawData, NULL, FILE_BEGIN);
       if (!ReadFile(hFile, buffer, SH[i].SizeOfRawData, &bytesRead, NULL))
@@ -174,20 +192,14 @@ bool PELoader::LoadPEFile(const char* filepath)
         printf("Error writing file: %d\n", GetLastError());
         return false;
       }
+      break;
     }
+    
 
-    /*
-    if (name.compare(".idata") == 0)
+    SectionMap::iterator it = sectionMap.begin();
+    for(; it != sectionMap.end(); ++it)
     {
-      printf("Looking at idata section: 0x%X\n", SH[i].PointerToRawData);
-      IMAGE_IMPORT_DESCRIPTOR Start = (IMAGE_IMPORT_DESCRIPTOR)pByte[SH[i].PointerToRawData];
-      printf("Start Name: %s\n", Start->Name);
-      printf("xyz: 0x%X\n", Start->OriginalFirstThunk);
-    }
-    */
-
-    for (SectionInfo& info : sections)
-    {
+      SectionInfo& info = it->second;
       if (name.compare(info.name) == 0)
       {
         IMAGE_SECTION_HEADER header;
