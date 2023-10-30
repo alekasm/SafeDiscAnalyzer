@@ -22,7 +22,7 @@ int main(int argc, const char** argv)
   if (argc < 2)
   {
     printf("Usage: ./SafeDiscAnalyzer.exe <file> <args>\nArguments:\n");
-    printf("-antiasm\tpatches anti-disassembler routines\n");
+    printf("-antiasm\tpatches anti-disassembler routines for disassembly\n");
     printf("-bypass\tapplies various patches to crack the game\n");
     printf("-magic\tuses magic value from kernel driver + decryption\n");
     printf("-decrypt <offset> <size>\tshows decryption of txt at offset\n");
@@ -58,6 +58,12 @@ int main(int argc, const char** argv)
     }
   }
 
+  if (antiasm && (bypass || decrypt))
+  {
+    printf("Cannot using -antiasm with -bypass or -decrypt\n");
+    return 0;
+  }
+
   std::string hash;
   if (Analyzer::CreateMD5Hash(argv[1], hash))
     printf("Md5: %s\n", hash.c_str());
@@ -80,12 +86,10 @@ int main(int argc, const char** argv)
   if (antiasm)
   {
     printf("Analyzing sections for anti-disassembler techniques\n");
-    SectionMap::iterator it = loader.GetSectionMap().begin();
-    for (; it != loader.GetSectionMap().end(); ++it)
-    {
-      SectionInfo& section = it->second;
-      Analyzer::PatchSafeDiscAntiDisassembler(section);
-    }
+    SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
+    SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
+    Analyzer::PatchSafeDiscAntiDisassembler(info_txt2);
+    Analyzer::PatchSafeDiscAntiDisassembler(info_text);
   }
 
   if (bypass)

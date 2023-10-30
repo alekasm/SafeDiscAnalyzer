@@ -3,7 +3,10 @@
 #define TXT2_SECTION 0x41F000
 #define TEXT_SECTION 0x40C000
 #define DATA_SECTION 0x429000
+
 //#define DEBUGGING_ENABLED
+
+
 //42A9D8 = ReadProcessMemory
 //42A9F0 = WriteProcessMemory
 //42AA08 = VirtualProtect
@@ -399,18 +402,6 @@ void txt2_ApplyInterruptDebugPatch(SectionInfo& info)
   memcpy(&info.data[sectionOffset + 2] , &dvalue, 4);
 }
 
-/*
-void text_DisableDecryption(SectionInfo& info)
-{
-  //We are using the already decrypted .text section which
-  //is dumped on CD failure
-  for (size_t i = 0x40E268; i < 0x40E288; ++i)
-  {
-    size_t sectionOffset = i - TEXT_SECTION;
-    info.data[sectionOffset] = 0x90;
-  }
-}
-*/
 
 struct RelocationData {
   uint32_t size;
@@ -418,6 +409,8 @@ struct RelocationData {
   uint32_t end_offset;
   uint32_t entry;
 };
+
+#include <conio.h>
 
 bool FindRelocationTable(SectionInfo& info_reloc, SectionInfo& info_text, std::vector<RelocationData>* out = nullptr)
 {
@@ -430,28 +423,36 @@ bool FindRelocationTable(SectionInfo& info_reloc, SectionInfo& info_text, std::v
   char buffer[4];
   memset(buffer, 0, sizeof(buffer));
   memcpy(&buffer[0], &VirtualAddress, 4);
-  //buffer[4] = 0x60; //size also changes...
   std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info_reloc, buffer, "xxxx", false);
   if (offsets.size() == 0)
   {
     printf("Failed to find relocation table for RVA: 0x%X (results=%d)\n", VirtualAddress, offsets.size());
     return false;
   }
-  uint32_t vsize = VirtualSize;
+  int32_t vsize = VirtualSize;
   unsigned int table_offset = offsets.at(0);
   uint32_t entry_va = 0;
   uint32_t entry_size = 0;
   unsigned int va_override = VirtualAddressCopy;
   uint32_t total_offset = 0;
+  uint32_t last_va = 0;
   while (vsize > 0)
   {
     memcpy(&entry_va, &info_reloc.data[table_offset], 4);
     memcpy(&entry_size, &info_reloc.data[table_offset + 4], 4);
-    uint32_t data_size = vsize;
-    if (data_size > 0x1000)
-      data_size = 0x1000;
+    uint32_t data_size = 0;
+
+    //relocation tables can skip over pages
+    if (last_va > 0)
+      data_size = entry_va - last_va;
+    last_va = entry_va;
+    va_override += data_size;
+
     memcpy(&info_reloc.data[table_offset], &va_override, 4);
-    printf("Found relocation for 0x%X at 0x%X (0x%X)\n", entry_va, table_offset, table_offset + info_reloc.header.PointerToRawData);
+    printf("Found relocation at 0x%X (0x%X): 0x%X -> 0x%X\n",
+      table_offset,
+      table_offset + info_reloc.header.PointerToRawData,
+      entry_va, va_override);
     if (out != nullptr)
     {
       RelocationData data;
@@ -461,8 +462,7 @@ bool FindRelocationTable(SectionInfo& info_reloc, SectionInfo& info_text, std::v
       data.entry = entry_va;
       out->push_back(data);
     }
-    vsize -= data_size;
-    va_override += data_size;
+    vsize -= data_size > 0 ? data_size : 0x1000;
     table_offset += entry_size;
     total_offset += entry_size;
   }
@@ -518,38 +518,24 @@ void ApplyF18Patches(PELoader& loader, bool magic)
   }
 }
 
+//TODO: relocation patching now works, but we need to re-adjust 
+//But the returned decryption does not with the table skips
 void Decrypt(PELoader& loader, int showOffset, int showSize)
 {
-  //SectionInfo& info_txt, SectionInfo& info_txt2, SectionInfo& info_text, SectionInfo& info_reloc
-
-  //TODO:
-  /*
-  int RelocationSkew = Layer3RelocationDecryption(info_text, info_reloc);
-  if (RelocationSkew == 0)
-  {
-    printf("Failed to decrypt\n");
-    return;
-  }
-  printf("Relocation Skew: 0x%X\n", RelocationSkew);
-  return;
-  */
-
   SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELOC);
   SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
   SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
   SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
 
   std::vector<RelocationData> reloc_data;
-  uint32_t reloc_table = FindRelocationTable(info_reloc, info_text, &reloc_data);
-  if (reloc_table == 0) return;
-
-
-  //0x2D813BF9
+  if(!FindRelocationTable(info_reloc, info_text, &reloc_data))
+    return;
 
   //txt section is the encrypted data that needs to be decrypted.
   //First pass prepares the encrypted txt section, xor with a rolling key - 8 bytes
   //The second pass xors with the txt2 section, and uses the secdrv kernel key every 16 bytes
   //Third pass will update the skew value as a result from the text section
+  //Can verify this in .rdata +C, + 10 - consistent at least across Jane's F18
   const int DECRYPTION_SIZE = 0x20; //pre-defined rdata:00428010
   const int DECRYPTION_VALUE = 0x9E3779B9; //pre-defined rdata:0042800C
   const int DECRYPTION_VALUE_START = DECRYPTION_VALUE << 5; // 0xC6EF3720
@@ -618,14 +604,11 @@ iter_firstpass:
       decryption_skew += 0x400; //dr7 result from secdrv driver
     if ((i + 1) % 0x1000 == 0)
     {
-      
-      //TODO: figure out size and info_text.data starting offset  ie text_index
-      //text_index is done via sectionDifference in CreateNextDecryptionSkewFromText:
       NextSkew = 0;
       int size_data = info_text.header.SizeOfRawData;
       unsigned int text_index = 0;
       int reloc_index = 0;
-      reloc_table = reloc_data.at(reloc_index).offset + 8;
+      uint32_t reloc_table = reloc_data.at(reloc_index).offset + 8;
       unsigned int table_index = reloc_table;
       unsigned short last_index = 0;
       unsigned int size_data_iter = size_data;

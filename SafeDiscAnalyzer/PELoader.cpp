@@ -195,7 +195,6 @@ bool PELoader::LoadPEFile(const char* filepath)
       break;
     }
     
-
     SectionMap::iterator it = sectionMap.begin();
     for(; it != sectionMap.end(); ++it)
     {
