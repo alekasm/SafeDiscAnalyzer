@@ -24,7 +24,7 @@
     <ClCompile Include="Analyzer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="F18Patch.cpp">
+    <ClCompile Include="Patch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -35,7 +35,7 @@
     <ClInclude Include="Analyzer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="F18Patch.h">
+    <ClInclude Include="Patch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

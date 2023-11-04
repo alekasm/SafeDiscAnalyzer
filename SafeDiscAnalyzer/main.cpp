@@ -1,24 +1,14 @@
 #include "PELoader.h"
 #include "Analyzer.h"
-#include "F18Patch.h"
+#include "Patch.h"
 #include <vector>
 #include <unordered_map>
 
-
+#include <Ntddscsi.h>
 int main(int argc, const char** argv)
 {
-  //CONTEXT t = { 0 }; //Context+A4
-  //printf("CONTEXT size: 0x%X\n", sizeof(CONTEXT));
-  //printf("FLOATING_SAVE_AREA size: 0x%X\n", sizeof(FLOATING_SAVE_AREA));
-  //printf("start=0x%X, edi = 0x%X, 0x%X\n", &t, &(t.Esp), ((int)(&(t.Esp))) - ((int)(&t)));
-  //CONTEXT size: 0x2CC
-  //FLOATING_SAVE_AREA size : 0x70
-  //return 0;
-  //int start = *((int*) &t);
-  //int edi = *((int*)&t.Edi);
- 
-  
-  //return 0; 
+
+
   if (argc < 2)
   {
     printf("Usage: ./SafeDiscAnalyzer.exe <file> <args>\nArguments:\n");
@@ -94,8 +84,8 @@ int main(int argc, const char** argv)
 
   if (bypass)
   {
-    printf("Applying F18 patches\n");
-    ApplyF18Patches(loader, magic);
+    printf("Applying patches\n");
+    ApplyPatches(loader, magic);
   }
 
   bool result = loader.PatchPEFile(argv[1]);

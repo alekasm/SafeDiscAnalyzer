@@ -129,13 +129,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Analyzer.cpp" />
-    <ClCompile Include="F18Patch.cpp" />
+    <ClCompile Include="Patch.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="PELoader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Analyzer.h" />
-    <ClInclude Include="F18Patch.h" />
+    <ClInclude Include="Patch.h" />
     <ClInclude Include="PELoader.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

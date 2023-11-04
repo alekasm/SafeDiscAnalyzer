@@ -1,4 +1,4 @@
-#include "F18Patch.h"
+#include "Patch.h"
 
 #define TXT2_SECTION 0x41F000
 #define TEXT_SECTION 0x40C000
@@ -117,6 +117,7 @@ void text_CanOpenSecdrvPatch(SectionInfo& info)
 
 void text_SecdrvProcessIoctlPatch(SectionInfo& info)
 {
+  //This same exact function exists in both the exe wrapper and dplayerx
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
   //This calls an ioctl with the following buffer (IoctlBuffer):
   //IoctlBuffer[0] = 1 (4 byte)
@@ -470,7 +471,7 @@ bool FindRelocationTable(SectionInfo& info_reloc, SectionInfo& info_text, std::v
 }
 
 
-void ApplyF18Patches(PELoader& loader, bool magic)
+void ApplyPatches(PELoader& loader, bool magic)
 {
   SectionMap::iterator it = loader.GetSectionMap().begin();
   for (; it != loader.GetSectionMap().end(); ++it)
