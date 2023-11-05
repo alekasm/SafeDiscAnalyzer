@@ -4,7 +4,6 @@
 #include <vector>
 #include <unordered_map>
 
-static const DWORD WIN32_PE_ENTRY = 0x400000;
 struct SectionInfo {
   SectionInfo(const char* name, const char* copy, BOOL decryptedExec = FALSE) : 
     name(name), copy(copy)
@@ -37,8 +36,11 @@ struct PELoader
   bool PatchPEFile(const char* filepath);
   bool FoundAllSections();
   void Destroy();
+  DWORD GetImageBase() { return imageBase; }
   SectionMap& GetSectionMap() { return sectionMap; }
 private:
+  const DWORD WIN32_PE_ENTRY = 0x400000;
+  DWORD imageBase = WIN32_PE_ENTRY;
   SectionMap sectionMap = {
     {TEXT, SectionInfo(".text", ".tex2", TRUE)},
     {TXT2,  SectionInfo(".txt2", ".txt3", TRUE)},

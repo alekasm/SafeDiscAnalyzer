@@ -1,12 +1,6 @@
 #include "Patch.h"
 
-#define TXT2_SECTION 0x41F000
-#define TEXT_SECTION 0x40C000
-#define DATA_SECTION 0x429000
-
 //#define DEBUGGING_ENABLED
-
-
 //42A9D8 = ReadProcessMemory
 //42A9F0 = WriteProcessMemory
 //42AA08 = VirtualProtect
@@ -31,34 +25,36 @@
 //42AB10 = \\\\.\\SICE
 //42AB30 = \\\\.\\NTICE
 
-void data_StringPatch(SectionInfo& info)
+const char* sTrue = "true";
+const char* sFalse = "false";
+
+const char* sbool(bool b)
 {
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, ".txt2\x00", "xxxxxx");
-  if (offsets.size() != 3)
+  return b ? sTrue : sFalse;
+}
+
+void data_StringPatch(PELoader& loader,  bool patch)
+{
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::DATA);
+  std::vector<uint32_t> txt2_offsets = Analyzer::FindSectionPattern(info, ".txt2\x00", "xxxxxx", loader.GetImageBase());
+  std::vector<uint32_t> text_offsets = Analyzer::FindSectionPattern(info, ".text\x00", "xxxxxx", loader.GetImageBase());
+
+  for (uint32_t offset : txt2_offsets)
   {
-    printf("Found %ld results for .txt2\n", offsets.size());
-    return;
-  }
-  for (uint32_t offset : offsets)
-  {
-    printf("Found .txt2 at 0x%X\n", offset);
-    memcpy(&info.data[offset - info.VirtualAddress], ".txt3", 6);
+    printf("Found .txt2 at 0x%X, patching: %s\n", offset, sbool(patch));
+    if (patch)
+      memcpy(&info.data[offset - info.VirtualAddress], ".txt3", 6);
   }
 
-  std::vector<uint32_t> offsets2 = Analyzer::FindSectionPattern(info, ".text\x00", "xxxxxx");
-  if (offsets2.size() != 1)
+  for (uint32_t offset : text_offsets)
   {
-    printf("Found %ld results for .text\n", offsets2.size());
-    return;
-  }
-  for (uint32_t offset : offsets2)
-  {
-    printf("Found .text at 0x%X\n", offset);
-    memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
+    printf("Found .text at 0x%X, patching: %s\n", offset, sbool(patch));
+    if (patch)
+      memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
   }
 }
 
-void txt2_drvmgtPatch(SectionInfo& info)
+void txt2_drvmgtPatch(PELoader& loader,  bool patch)
 {  
   //Prevents drvmgt.dll from loading and calling Setup
   //SafeDiscError(0x0B, 0x0A, 0x10)
@@ -76,13 +72,16 @@ void txt2_drvmgtPatch(SectionInfo& info)
   //according to F18.exe and drvmgt.dll
 
   //size_t sectionOffset = 0x4229F0 - TXT2_SECTION;
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x81\xEC\xA0\x02\x00\x00", "xxxxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, 
+    "\x55\x8B\xEC\x81\xEC\xA0\x02\x00\x00", "xxxxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for drvmgt\n");
     return;
   }
-  printf("Found drvmgt at 0x%X\n", offsets.at(0));
+  printf("Found drvmgt at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x8B\x4D\x10"          //mov ecx, dword ptr [ebp + 0x10]
@@ -95,19 +94,22 @@ void txt2_drvmgtPatch(SectionInfo& info)
   //sub_40F780 drive check needs to return 1 for true
 }
 
-void text_CanOpenSecdrvPatch(SectionInfo& info)
+void text_CanOpenSecdrvPatch(PELoader& loader,  bool patch)
 {
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
   //This really doesn't do much besides take in some message then return a bool.
 
   //size_t sectionOffset = 0x4147A3 - TEXT_SECTION;
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x51\xE8\x20\x00\x00\x00", "xxxxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x55\x8B\xEC\x51\xE8\x20\x00\x00\x00", "xxxxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for CanOpenSecdrv\n");
     return;
   }
-  printf("Found CanOpenSecdrv at 0x%X\n", offsets.at(0));
+  printf("Found CanOpenSecdrv at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
@@ -115,7 +117,7 @@ void text_CanOpenSecdrvPatch(SectionInfo& info)
     6);
 }
 
-void text_SecdrvProcessIoctlPatch(SectionInfo& info)
+void text_SecdrvProcessIoctlPatch(PELoader& loader,  bool patch)
 {
   //This same exact function exists in both the exe wrapper and dplayerx
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
@@ -129,14 +131,16 @@ void text_SecdrvProcessIoctlPatch(SectionInfo& info)
   //IoctlBuffer[514] = status message, outBuffer
   //IoctlBuffer[520] = kernel time reported
   //size_t sectionOffset = 0x414818 - TEXT_SECTION;
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x83\xEC\x0C\xE8\xA9\xFF\xFF\xFF", "xxxxxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x55\x8B\xEC\x83\xEC\x0C\xE8\xA9\xFF\xFF\xFF", "xxxxxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for SecdrvProcessIoctl\n");
     return;
   }
-  printf("Found SecdrvProcessIoctl at 0x%X\n", offsets.at(0));
-
+  printf("Found SecdrvProcessIoctl at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   //We will use this function as free space to write code that will populate the IoctlBuffer with the expected
   //values. Luckily there's just a magic number - 0x400. The offset is at the outbuffer section + 410/414 which ends up
   //being buffer+924/928h
@@ -155,21 +159,23 @@ void text_SecdrvProcessIoctlPatch(SectionInfo& info)
   memcpy(&info.data[sectionOffset + 2], &IoctlBuffer, 4);
 }
 
-void txt2_AddMagicSkewValuePatch(SectionInfo& info)
+void txt2_AddMagicSkewValuePatch(PELoader& loader,  bool patch)
 {
   //Just bypass all the various checks and secdrv ioctls by applying the magic number to the decryption skew.
   //This value is found in secdrv.sys GetDebugRegister (Command=3C) at 0x10F60, register dr7 = 0x400.
   //When the ioctl buffer is inspected back in program space, it's not really manipulated in the weird looking
   //decryption function at 0x416B40 (DecryptIoctlMessage). The result from DecryptIoctlMessage is 0x400 - 
   //then that's added to DecryptionValueWithSkew.
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x33\xC2\x2B\xC2\x83\xE0\x0F", "xxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x33\xC2\x2B\xC2\x83\xE0\x0F", "xxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for AddMagicSkewValue\n");
     return;
   }  
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  printf("Found AddMagicSkewValue at 0x%X (0x%X)\n", offsets.at(0), sectionOffset);
+  printf("Found AddMagicSkewValue at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t start = sectionOffset + 0x13;
   int DecryptionValueWithSkew;
   memcpy(&DecryptionValueWithSkew, &info.data[sectionOffset - 0xD], 4);
@@ -184,19 +190,21 @@ void txt2_AddMagicSkewValuePatch(SectionInfo& info)
 }
 
 
-void text_SecdrvStatusMessagePatch(SectionInfo& info)
+void text_SecdrvStatusMessagePatch(PELoader& loader,  bool patch)
 {
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
   //This really doesn't do much besides take in some message then return a bool.
   //The message passed to the ioctl is 0x42EC30
   //size_t sectionOffset = 0x414760 - TEXT_SECTION;
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x55\x8B\xEC\x8B\x45\x08\x83\x38\x01", "xxxxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x55\x8B\xEC\x8B\x45\x08\x83\x38\x01", "xxxxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for SecdrvStatusMessage\n");
     return;
   }
-  printf("Found SecdrvStatusMessage at 0x%X\n", offsets.at(0));
+  printf("Found SecdrvStatusMessage at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
@@ -204,7 +212,7 @@ void text_SecdrvStatusMessagePatch(SectionInfo& info)
     6);
 }
 
-void text_TickCountLowPatch(SectionInfo& info)
+void text_TickCountLowPatch(PELoader& loader,  bool patch)
 {
   //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
   //This really doesn't do much besides take in some message then return a bool.
@@ -219,13 +227,15 @@ void text_TickCountLowPatch(SectionInfo& info)
   //is provided to allow others to debug
   
   //size_t sectionOffset = 0x4149DB - TEXT_SECTION;
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x76\x05\x66\x33\xC0", "xxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x76\x05\x66\x33\xC0", "xxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for TickCountLow\n");
     return;
   }
-  printf("Found TickCountLow at 0x%X\n", offsets.at(0));
+  printf("Found TickCountLow at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xEB", //jbe -> jmp
@@ -242,19 +252,20 @@ KUSER_SHARED_DATA
 */
 
 
-void txt2_BeingDebuggedPEBPatch(SectionInfo& info)
+void txt2_BeingDebuggedPEBPatch(PELoader& loader,  bool patch)
 {
   //Uses TIB fs:18 + 0x30 = PEB + 2 = BeingDebugged
   //TODO: There's actually another check for +0x20 in the larger executable
   //size_t sectionOffset = 0x42436A - TXT2_SECTION;
-
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x64\xA1\x18\x00\x00\x00\x8B\x48\x30", "xxxxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x64\xA1\x18\x00\x00\x00\x8B\x48\x30", "xxxxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for BeingDebuggedPEB\n");
     return;
   }
-  printf("Found BeingDebuggedPEB at 0x%X\n", offsets.at(0));
+  printf("Found BeingDebuggedPEB at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x33\xC0"                 //xor eax, eax
@@ -264,23 +275,25 @@ void txt2_BeingDebuggedPEBPatch(SectionInfo& info)
     13);
 }
 
-void txt2_CheckKernel32BreakpointPatch(SectionInfo& info)
+void txt2_CheckKernel32BreakpointPatch(PELoader& loader,  bool patch)
 {
   //Simply jmp 4245A6->42468F. Goes over all functions in the Kernel32 export directory
   //to see if the first byte of any function has a 0xCC
 }
 
-void txt2_IsBeingDebuggedPatch(SectionInfo& info)
+void txt2_IsBeingDebuggedPatch(PELoader& loader,  bool patch)
 {
   //4242A9 they decrypt "IsDebuggerPresent" and call from Kernel32.dll
   //size_t sectionOffset = 0x4242D4 - TXT2_SECTION;
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\xFF\x55\xF0\x66\x89\x85\x4C\xFF\xFF\xFF", "xxxxxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\xFF\x55\xF0\x66\x89\x85\x4C\xFF\xFF\xFF", "xxxxxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for IsBeingDebugged\n");
     return;
   }
-  printf("Found IsBeingDebugged at 0x%X\n", offsets.at(0));
+  printf("Found IsBeingDebugged at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x33\xC0"                 //xor eax, eax
@@ -288,7 +301,7 @@ void txt2_IsBeingDebuggedPatch(SectionInfo& info)
     3);
 }
 
-void txt2_NTQueryProcessInformationPatch(SectionInfo& info)
+void txt2_NTQueryProcessInformationPatch(PELoader& loader,  bool patch)
 {
   //Function: 0x4239DF
   // 0x423C1B = CALL NtQueryInformationProcess
@@ -302,14 +315,15 @@ void txt2_NTQueryProcessInformationPatch(SectionInfo& info)
   // ignore these values and just assign 0 to thhe stack variable
   // 423C57: jmp 423C96
   //size_t sectionOffset = 0x423C57 - TXT2_SECTION;
-
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x83\xBD\x2C\xFF\xFF\xFF\x00", "xxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x83\xBD\x2C\xFF\xFF\xFF\x00", "xxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for NTQueryProcessInformation\n");
     return;
   }
-  printf("Found NTQueryProcessInformation at 0x%X\n", offsets.at(0));
+  printf("Found NTQueryProcessInformation at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xEB\x3D"                 //jmp 0x423C96
@@ -317,7 +331,7 @@ void txt2_NTQueryProcessInformationPatch(SectionInfo& info)
     7);
 }
 
-void txt2_SoftICEDebuggerCheck(SectionInfo& info)
+void txt2_SoftICEDebuggerCheck(PELoader& loader,  bool patch)
 {
   // 0x42AB10 = Encrypted \\\\.\\SICE (driver)
   // 0x42AB30 = Encrypted \\\\.\\NTICE (driver)
@@ -328,14 +342,15 @@ void txt2_SoftICEDebuggerCheck(SectionInfo& info)
   //You want this to be -1, ie CreateFile(\\\\.\\NTICE) fails.
 
   //size_t sectionOffset = 0x423DDF - TXT2_SECTION;
-
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x8B\x8D\x60\xFF\xFF\xFF\x51\xFF", "xxxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x8B\x8D\x60\xFF\xFF\xFF\x51\xFF", "xxxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for SoftICEDebugger\n");
     return;
   }
-  printf("Found SoftICEDebugger at 0x%X\n", offsets.at(0));
+  printf("Found SoftICEDebugger at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t sectionOffset = offsets.at(0) - 0x12 - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\xFF\xFF\xFF\xFF"          //mov eax, 0xFFFFFFFF
@@ -355,20 +370,21 @@ void txt2_SoftICEDebuggerCheck(SectionInfo& info)
 //  - arg4: 0, ReturnLength (optional)
 
 
-void text_ApplyFauxCDCheckPatch(SectionInfo& info)
+void text_ApplyFauxCDCheckPatch(PELoader& loader,  bool patch)
 {
   //The return result doesn't appear to be used, and nothing
   //interesting happens within the function itself besides
   //checking. This could be a purposeful trap.
   //size_t sectionOffset = 0x40F720 - TEXT_SECTION;
-
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\x81\xEC\x04\x01\x00\x00\x8D\x44\x24\x00", "xxxxxxxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x81\xEC\x04\x01\x00\x00\x8D\x44\x24\x00", "xxxxxxxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for FauxCDCheck\n");
     return;
   }
-  printf("Found FauxCDCheck at 0x%X\n", offsets.at(0));
+  printf("Found FauxCDCheck at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x66\xB8\x01\x00" //mov ax, 1
@@ -376,7 +392,7 @@ void text_ApplyFauxCDCheckPatch(SectionInfo& info)
     5);
 }
 
-void txt2_ApplyInterruptDebugPatch(SectionInfo& info)
+void txt2_ApplyInterruptDebugPatch(PELoader& loader,  bool patch)
 {
   //0x424F90 function (HardwareDebugTrap) attempts to call "int 0x1"
   //which should result in an exception of 0xC0000005. If a debugger is present,
@@ -384,14 +400,15 @@ void txt2_ApplyInterruptDebugPatch(SectionInfo& info)
   //the exception handler.
   //TODO: This does not appear in the larger executable...
   //size_t sectionOffset = 0x424D69 - TXT2_SECTION;
-
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info, "\xC7\x05\x00\x00\x00\x00\xFF\x00\x00\x00\xE8", "xx????xxxxx");
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\xC7\x05\x00\x00\x00\x00\xFF\x00\x00\x00\xE8", "xx????xxxxx", loader.GetImageBase());
   if (offsets.size() != 1)
   {
     printf("Expected to find one result for InterruptDebug\n");
     return;
   }
-  printf("Found InterruptDebug at 0x%X\n", offsets.at(0));
+  printf("Found InterruptDebug at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   int dvalue;
   memcpy(&dvalue, &info.data[sectionOffset + 2], 4);
@@ -411,25 +428,26 @@ struct RelocationData {
   uint32_t entry;
 };
 
-#include <conio.h>
-
-bool FindRelocationTable(SectionInfo& info_reloc, SectionInfo& info_text, std::vector<RelocationData>* out = nullptr)
+bool UpdateRelocationTable(PELoader& loader, std::vector<RelocationData>* out = nullptr)
 {
+
+  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELOC);
+  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
   //Search for Base Relocation Block, then add 0x8 for the entries
   //TODO: actually walk the tables correctly
-
-  uint32_t VirtualAddress = info_text.VirtualAddress - WIN32_PE_ENTRY;
+  uint32_t VirtualAddress = info_text.VirtualAddress - loader.GetImageBase();
   uint32_t VirtualSize = info_text.header.Misc.VirtualSize;
-  uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - WIN32_PE_ENTRY;
+  uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - loader.GetImageBase();
   char buffer[4];
   memset(buffer, 0, sizeof(buffer));
   memcpy(&buffer[0], &VirtualAddress, 4);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info_reloc, buffer, "xxxx", false);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info_reloc, buffer, "xxxx", 0);
   if (offsets.size() == 0)
   {
     printf("Failed to find relocation table for RVA: 0x%X (results=%d)\n", VirtualAddress, offsets.size());
     return false;
   }
+  printf("Found relocation table at 0x%X, VirtualSize=0X%X\n", offsets.at(0), VirtualSize);
   int32_t vsize = VirtualSize;
   unsigned int table_offset = offsets.at(0);
   uint32_t entry_va = 0;
@@ -473,50 +491,20 @@ bool FindRelocationTable(SectionInfo& info_reloc, SectionInfo& info_text, std::v
 
 void ApplyPatches(PELoader& loader, bool magic)
 {
-  SectionMap::iterator it = loader.GetSectionMap().begin();
-  for (; it != loader.GetSectionMap().end(); ++it)
-  {
-    SectionInfo& section = it->second;
-    if (it->first == SectionType::TEXT)
-    {
-      //text_ApplyFauxCDCheckPatch(section);
-      if (!magic)
-      {
-        text_CanOpenSecdrvPatch(section);
-        text_SecdrvProcessIoctlPatch(section);
-        text_TickCountLowPatch(section);
-        text_SecdrvStatusMessagePatch(section);
-      }
-    }
-    else if (it->first == SectionType::TXT2)
-    {
-      if (magic)
-      {
-        txt2_AddMagicSkewValuePatch(section);
-      }
-
-      if (!magic)
-      {
-        txt2_IsBeingDebuggedPatch(section);
-        txt2_BeingDebuggedPEBPatch(section);
-        txt2_CheckKernel32BreakpointPatch(section);
-      }
-
-      txt2_ApplyInterruptDebugPatch(section);
-      txt2_drvmgtPatch(section);
-      txt2_SoftICEDebuggerCheck(section);
-      txt2_NTQueryProcessInformationPatch(section);
-    }
-    else if (it->first == SectionType::DATA)
-    {
-      data_StringPatch(section);
-    }
-    else if (it->first == SectionType::RELOC)
-    {
-
-      FindRelocationTable(section, loader.GetSectionMap().at(SectionType::TEXT));
-    }
-  }
+  data_StringPatch(loader, true);
+  text_CanOpenSecdrvPatch(loader, !magic);
+  text_SecdrvProcessIoctlPatch(loader, !magic);
+  text_TickCountLowPatch(loader, !magic);
+  text_SecdrvStatusMessagePatch(loader, !magic);
+  txt2_AddMagicSkewValuePatch(loader, magic);
+  txt2_IsBeingDebuggedPatch(loader, !magic);
+  txt2_BeingDebuggedPEBPatch(loader, !magic);
+  txt2_CheckKernel32BreakpointPatch(loader, !magic);
+  txt2_ApplyInterruptDebugPatch(loader, true);
+  txt2_drvmgtPatch(loader, true);
+  txt2_SoftICEDebuggerCheck(loader, true);
+  txt2_NTQueryProcessInformationPatch(loader, true);
+  UpdateRelocationTable(loader);
 }
 
 //TODO: relocation patching now works, but we need to re-adjust 
@@ -529,7 +517,7 @@ void Decrypt(PELoader& loader, int showOffset, int showSize)
   SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
 
   std::vector<RelocationData> reloc_data;
-  if(!FindRelocationTable(info_reloc, info_text, &reloc_data))
+  if(!UpdateRelocationTable(loader, &reloc_data))
     return;
 
   //txt section is the encrypted data that needs to be decrypted.
@@ -743,7 +731,7 @@ iter_firstpass:
     }
   }
  
-  unsigned long vaddr = WIN32_PE_ENTRY + info_txt.header.VirtualAddress;
+  unsigned long vaddr = loader.GetImageBase() + info_txt.header.VirtualAddress;
   printf("Decryption 0x%08X - 0x%08X:\n", vaddr + showOffset, vaddr + showOffset + showSize);
   for (unsigned int i = showOffset; i < (showOffset + showSize); ++i)
   {

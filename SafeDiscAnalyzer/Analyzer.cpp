@@ -58,7 +58,7 @@ find:
   }
 }
 
-std::vector<uint32_t> Analyzer::FindSectionPattern(SectionInfo& info, const char* pattern, const char* mask, bool useVaddress)
+std::vector<uint32_t> Analyzer::FindSectionPattern(SectionInfo& info, const char* pattern, const char* mask, DWORD vAddress)
 {
   DWORD offset = 0;
   std::vector<uint32_t> results;
@@ -66,8 +66,8 @@ std::vector<uint32_t> Analyzer::FindSectionPattern(SectionInfo& info, const char
   if (FindPattern(info.data, info.header.SizeOfRawData, pattern, mask, offset))
   {
     uint32_t soffset = offset;
-    if(useVaddress)
-      soffset += info.header.VirtualAddress + 0x400000;
+    if(vAddress > 0)
+      soffset += info.header.VirtualAddress + vAddress;
     results.push_back(soffset);
     offset++;
     goto find;
@@ -75,7 +75,7 @@ std::vector<uint32_t> Analyzer::FindSectionPattern(SectionInfo& info, const char
   return results;
 }
 
-int FixAntiDisassembler(SectionInfo& info, const Function& function)
+int FixAntiDisassembler(SectionInfo& info, DWORD imageBase, const Function& function)
 {
   //90 87 C0 7C F7  90 7C
   //nop
@@ -93,7 +93,7 @@ scan:
   {
     offset += 5;
     DWORD garbageOffset = offset + function.offset;
-    DWORD vaddr = WIN32_PE_ENTRY + info.header.VirtualAddress + garbageOffset;
+    DWORD vaddr = imageBase + info.header.VirtualAddress + garbageOffset;
     info.data[garbageOffset] = 0x90; //replace with nop
     ++patched;
     //printf("Found garbage byte at: %X (offset=%X, size=%X)\n", vaddr, offset, function.size);
@@ -102,15 +102,16 @@ scan:
   return patched;
 }
 
-void Analyzer::PatchSafeDiscAntiDisassembler(SectionInfo& info)
+void Analyzer::PatchSafeDiscAntiDisassembler(PELoader& loader, SectionType type)
 {
+  SectionInfo& info = loader.GetSectionMap().at(type);
   std::vector<Function> functions;
   FindFunctions(info, functions);
   printf("Found %d functions in %s section\n", functions.size(), info.name);
   for (const Function& f : functions)
   {
-    DWORD rva = WIN32_PE_ENTRY + info.header.VirtualAddress + f.offset;
-    int result = FixAntiDisassembler(info, f);
+    DWORD rva = loader.GetImageBase() + info.header.VirtualAddress + f.offset;
+    int result = FixAntiDisassembler(info, loader.GetImageBase(), f);
     printf("[%s] Analyzed %d garbage bytes in function at: %0X - %0X (size=%0X)\n",
       info.name, result, rva, rva + f.size, f.size);
   }

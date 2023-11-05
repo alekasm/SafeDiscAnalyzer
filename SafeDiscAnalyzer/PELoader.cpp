@@ -113,6 +113,9 @@ bool PELoader::LoadPEFile(const char* filepath)
 
   PIMAGE_FILE_HEADER FH = &NT->FileHeader;
   PIMAGE_OPTIONAL_HEADER OH = &NT->OptionalHeader;
+  printf("Image Base: 0x%X\n", OH->ImageBase);
+  if (OH->ImageBase > 0)
+    imageBase = OH->ImageBase;
   IMAGE_DATA_DIRECTORY z = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
   if (OH->Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
   {
@@ -132,7 +135,7 @@ bool PELoader::LoadPEFile(const char* filepath)
     std::string name(reinterpret_cast<char const*>(SH[i].Name));
     printf("%s: VA=%0X,RVA=%0X,VSize=%0X,RDP=%0X,RSZ=%0X,VSZ=%0X\n",
       name.c_str(),
-      SH[i].VirtualAddress, SH[i].VirtualAddress + WIN32_PE_ENTRY,
+      SH[i].VirtualAddress, SH[i].VirtualAddress + imageBase,
       SH[i].Misc.VirtualSize,
       SH[i].PointerToRawData,
       SH[i].SizeOfRawData,
@@ -175,9 +178,9 @@ bool PELoader::LoadPEFile(const char* filepath)
       DWORD bytesRead;
 
       printf("Copying %s (Offset: 0x%X, VA:0x%X) section to %s (Offset:0x%X, VA:0x%X)\n",
-        SH[i].Name, SH[i].PointerToRawData, SH[i].VirtualAddress + WIN32_PE_ENTRY,
-        SH[NewIndex].Name, SH[NewIndex].PointerToRawData, SH[NewIndex].VirtualAddress + WIN32_PE_ENTRY);
-      it_copy->second.VirtualAddressCopy = SH[NewIndex].VirtualAddress + WIN32_PE_ENTRY;
+        SH[i].Name, SH[i].PointerToRawData, SH[i].VirtualAddress + imageBase,
+        SH[NewIndex].Name, SH[NewIndex].PointerToRawData, SH[NewIndex].VirtualAddress + imageBase);
+      it_copy->second.VirtualAddressCopy = SH[NewIndex].VirtualAddress + imageBase;
 
       SetFilePointer(hFile, SH[i].PointerToRawData, NULL, FILE_BEGIN);
       if (!ReadFile(hFile, buffer, SH[i].SizeOfRawData, &bytesRead, NULL))
@@ -204,7 +207,7 @@ bool PELoader::LoadPEFile(const char* filepath)
         IMAGE_SECTION_HEADER header;
         ZeroMemory(&header, sizeof(IMAGE_SECTION_HEADER));
         memcpy(&header, &SH[i], sizeof(IMAGE_SECTION_HEADER));
-        info.VirtualAddress = header.VirtualAddress + WIN32_PE_ENTRY;
+        info.VirtualAddress = header.VirtualAddress + imageBase;
 
         SetFilePointer(hFile, header.PointerToRawData, NULL, FILE_BEGIN);
         PBYTE buffer = new BYTE[header.SizeOfRawData];

@@ -8,7 +8,6 @@
 int main(int argc, const char** argv)
 {
 
-
   if (argc < 2)
   {
     printf("Usage: ./SafeDiscAnalyzer.exe <file> <args>\nArguments:\n");
@@ -76,10 +75,8 @@ int main(int argc, const char** argv)
   if (antiasm)
   {
     printf("Analyzing sections for anti-disassembler techniques\n");
-    SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
-    SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
-    Analyzer::PatchSafeDiscAntiDisassembler(info_txt2);
-    Analyzer::PatchSafeDiscAntiDisassembler(info_text);
+    Analyzer::PatchSafeDiscAntiDisassembler(loader, SectionType::TXT2);
+    Analyzer::PatchSafeDiscAntiDisassembler(loader, SectionType::TEXT);
   }
 
   if (bypass)
