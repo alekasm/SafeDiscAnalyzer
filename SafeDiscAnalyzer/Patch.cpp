@@ -420,6 +420,48 @@ void txt2_ApplyInterruptDebugPatch(PELoader& loader,  bool patch)
   memcpy(&info.data[sectionOffset + 2] , &dvalue, 4);
 }
 
+void txt2_ReadMZPEHeaderPatch(PELoader& loader, bool patch)
+
+{
+  //hmm this didnt fix the issue at 4171C8/413598, its still using the original reloc value
+  //0x41F480 - ReadPETableForSection
+  //ReadMZPEHeader is called and this buffer is stored on the stack
+  //For SectionType = 8, the relocation vaddress is taken from the stack
+  //replace this with our new relocation table that's modified.
+  /*
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x8B\x84\x24\xE4\x00\x00\x00\x50", "xxxxxxxx", loader.GetImageBase());
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for InterruptDebug\n");
+    return;
+  }
+  printf("Found RelocationLookup at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  info.data[sectionOffset] = 0xB8; //change encoding for mov imm32
+  SectionInfo& reloc_info = loader.GetSectionMap().at(SectionType::RELO2);
+  DWORD table_copy = reloc_info.header.VirtualAddress;
+  memcpy(&info.data[sectionOffset + 1], &table_copy, 4);
+  info.data[sectionOffset + 5] = 0x90;
+  info.data[sectionOffset + 6] = 0x90;
+  */
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x6A\x40\x6A\x00", "xxxx", loader.GetImageBase());
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for ReadMZPEHeader\n");
+    return;
+  }
+  size_t sectionOffsetVirtual = offsets.at(0) - 0xC; //function start
+  size_t sectionOffset = sectionOffsetVirtual - info.VirtualAddress;
+  printf("Found ReadMZPEHeader at 0x%X, patching: %s\n", sectionOffsetVirtual, sbool(patch));
+  size_t patchOffset = sectionOffset + 0x1A;
+  memcpy(&info.data[patchOffset],
+    "\x8B\x46\x38", //mov eax, dword ptr [esi + 0x38]
+    3);
+}
 
 struct RelocationData {
   uint32_t size;
@@ -431,7 +473,7 @@ struct RelocationData {
 bool UpdateRelocationTable(PELoader& loader, std::vector<RelocationData>* out = nullptr)
 {
 
-  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELOC);
+  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
   SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
   //Search for Base Relocation Block, then add 0x8 for the entries
   //TODO: actually walk the tables correctly
@@ -504,6 +546,7 @@ void ApplyPatches(PELoader& loader, bool magic)
   txt2_drvmgtPatch(loader, true);
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
+  txt2_ReadMZPEHeaderPatch(loader, true);
   UpdateRelocationTable(loader);
 }
 

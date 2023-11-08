@@ -4,31 +4,28 @@
 #include <vector>
 #include <unordered_map>
 
+enum SectionType { NONE = 0, TEXT, TXT2, TXT, DATA, RELOC, RELO2 };
+
 struct SectionInfo {
-  SectionInfo(const char* name, const char* copy, BOOL decryptedExec = FALSE) : 
-    name(name), copy(copy)
+  SectionInfo(const char* name, const char* copy, SectionType duplicate = NONE) :
+    name(name), copy(copy), duplicate(duplicate)
   {
-    ZeroMemory(&header, sizeof(IMAGE_SECTION_HEADER));
   }
-  SectionInfo(const char* name, BOOL decryptedExec = FALSE) : 
-    name(name)
-  {
-    ZeroMemory(&header, sizeof(IMAGE_SECTION_HEADER));
+  SectionInfo(const char* name, SectionType duplicate = NONE) :
+    name(name), duplicate(duplicate)
+  { 
   }
-  SectionInfo()
-  {
-    ZeroMemory(&header, sizeof(IMAGE_SECTION_HEADER));
-  }
+  SectionInfo() : duplicate(NONE){}
   const char* name = NULL;
   const char* copy = NULL;
   PBYTE data = NULL;
   uint32_t VirtualAddress = 0;
   uint32_t VirtualAddressCopy = 0;
-  IMAGE_SECTION_HEADER header;
+  IMAGE_SECTION_HEADER header = { 0 };
   BOOL initialized = FALSE;
+  const SectionType duplicate;
 };
 
-enum SectionType { TEXT, TXT2, TXT, DATA, RELOC };
 typedef std::unordered_map<SectionType, SectionInfo> SectionMap;
 struct PELoader
 {
@@ -39,14 +36,15 @@ struct PELoader
   DWORD GetImageBase() { return imageBase; }
   SectionMap& GetSectionMap() { return sectionMap; }
 private:
+  DWORD WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT);
   const DWORD WIN32_PE_ENTRY = 0x400000;
   DWORD imageBase = WIN32_PE_ENTRY;
-  SectionMap sectionMap = {
-    {TEXT, SectionInfo(".text", ".tex2", TRUE)},
-    {TXT2,  SectionInfo(".txt2", ".txt3", TRUE)},
+   SectionMap sectionMap = {
+    {TEXT, SectionInfo(".text", ".tex2")},
+    {TXT2,  SectionInfo(".txt2", ".txt3")},
     {TXT, SectionInfo(".txt")},
     {DATA, SectionInfo(".data")},
-    {RELOC, SectionInfo(".reloc")}
+    {RELOC, SectionInfo(".reloc", ".relo2", RELO2)}
   };
 
 };

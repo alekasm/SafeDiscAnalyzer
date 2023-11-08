@@ -5,7 +5,11 @@ void PELoader::Destroy()
   SectionMap::iterator it = sectionMap.begin();
   for (; it != sectionMap.end(); ++it)
   {
-    delete it->second.data;
+    if (it->second.data != NULL)
+    {
+      delete it->second.data;
+      it->second.data = NULL;
+    }
   }
 }
 
@@ -24,6 +28,91 @@ bool PELoader::FoundAllSections()
   return found_all;
 }
 
+bool WriteData(HANDLE hFile, IMAGE_SECTION_HEADER header, PBYTE data)
+{
+  DWORD dwPtr = SetFilePointer(hFile, header.PointerToRawData, NULL, FILE_BEGIN);
+  if (dwPtr == INVALID_SET_FILE_POINTER) // Test for failure
+  {
+    printf("Failed to SetFilePointer: %d\n", GetLastError());
+    CloseHandle(hFile);
+    return false;
+  }
+  DWORD bytesWritten;
+  if (!WriteFile(hFile, data, header.SizeOfRawData, &bytesWritten, NULL))
+  {
+    printf("Failed to WriteFile: %d\n", GetLastError());
+    return false;
+  }
+  return true;
+}
+
+DWORD PELoader::WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT)
+{
+  //This is some actual Frankenstein stuff.
+  //The relocation table whiuch used for decryption is fine for modification in the
+  //executable where the image base is at the desired location - not so much for 
+  //DPLAYERX.DLL where the relocation table is needed.
+
+  //What needed to happen was allowing the valid PE Header to load with the real
+  //relocation table, then having a duplicate PE pointing to the modified relocation
+  //table.
+
+  //Solution 1 was to add the duplicate PE header to the end of the file, and then
+  //redirect the offset there. Unfortunately for the read mode they end up not opening
+  //a file handle, but instead use the virtual memory - meaning the new PE won't get mapped
+
+  //Solution 2 was to once again abuse the free 16 section space along with the DOS Stub
+  //to create more for a new PE header right next to the original. The original PE with
+  //all section info is pushed right against the first section. The modified PE starts
+  //at the DOS Stub.
+
+  IMAGE_NT_HEADERS ntDuplicate;
+  memcpy(&ntDuplicate, NT, sizeof(IMAGE_NT_HEADERS));
+  DWORD relo2VAddress = sectionMap.at(RELO2).header.VirtualAddress;
+  ntDuplicate.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress = relo2VAddress;
+
+  //TODO: NumberOfSections not reporting correct amount
+  //DWORD sectionSize = NT->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER);
+  DWORD sectionCount = 11;
+  DWORD sectionSize = sectionCount * sizeof(IMAGE_SECTION_HEADER);
+  DWORD maxSectionSize = 16 * sizeof(IMAGE_SECTION_HEADER);
+  DWORD sectionOffset = maxSectionSize - sectionSize;
+  DWORD peHeaderSize = sectionSize + sizeof(IMAGE_NT_HEADERS);
+  printf("Size of total PE Header is: 0x%X (%d sections) which can be moved 0x%X bytes\n", peHeaderSize, NT->FileHeader.NumberOfSections, sectionOffset);
+
+  DWORD dw;
+  DWORD newPEOffset = 0x80 + sectionOffset;
+  PBYTE peHeader = new BYTE[peHeaderSize];
+  SetFilePointer(hFile, 0x80, NULL, FILE_BEGIN);
+  ReadFile(hFile, peHeader, peHeaderSize, &dw, NULL);
+  DWORD newAddr = SetFilePointer(hFile, newPEOffset, NULL, FILE_BEGIN);
+  WriteFile(hFile, peHeader, peHeaderSize, &dw, NULL);
+  SetFilePointer(hFile, 0x3C, NULL, FILE_BEGIN);
+  WriteFile(hFile, &newAddr, sizeof(DWORD), &dw, NULL);
+
+
+  DWORD ntDuplicatePtr = SetFilePointer(hFile, 0x40, NULL, FILE_BEGIN);
+  if (ntDuplicatePtr == INVALID_SET_FILE_POINTER) // Test for failure
+  {
+    printf("Failed to SetFilePointer: %d\n", GetLastError());
+    CloseHandle(hFile);
+    return false;
+  } 
+  if (!WriteFile(hFile, &ntDuplicate, sizeof(IMAGE_NT_HEADERS), &dw, NULL))
+  {
+    printf("Failed to write duplicate NT header\n");
+  }
+
+  //0x3C is the usual pointer to PE header, using 0x38 instead and patching
+  //functions later
+  SetFilePointer(hFile, 0x38, NULL, FILE_BEGIN);
+  WriteFile(hFile, &ntDuplicatePtr, sizeof(DWORD), &dw, NULL);
+
+  printf("Wrote new PE Header at 0x%X, using new relocation at: 0x%X\n",
+    ntDuplicatePtr, relo2VAddress);
+  return ntDuplicatePtr;
+}
+
 bool PELoader::PatchPEFile(const char* filepath)
 {
   std::string name(filepath);
@@ -37,23 +126,11 @@ bool PELoader::PatchPEFile(const char* filepath)
     return false;
   }
 
-  SectionMap::const_iterator it= sectionMap.begin();
+  SectionMap::const_iterator it = sectionMap.begin();
   for (; it != sectionMap.end(); ++it)
   {
     const SectionInfo& info = it->second;
-    DWORD dwPtr = SetFilePointer(hFile, info.header.PointerToRawData, NULL, FILE_BEGIN);
-    if (dwPtr == INVALID_SET_FILE_POINTER) // Test for failure
-    {
-      printf("Failed to SetFilePointer: %d\n", GetLastError());
-      CloseHandle(hFile);
-      return false;
-    }
-    DWORD bytesWritten;
-    if (!WriteFile(hFile, info.data, info.header.SizeOfRawData, &bytesWritten, NULL))
-    {
-      printf("Failed to write to file %s with error: %d\n", name.c_str(), GetLastError());
-      return false;
-    }
+    WriteData(hFile, info.header, info.data);
   }
 
   CloseHandle(hFile);
@@ -110,13 +187,15 @@ bool PELoader::LoadPEFile(const char* filepath)
     printf("File is missing NT signature\n");
     return false;
   }
+  
 
   PIMAGE_FILE_HEADER FH = &NT->FileHeader;
+ 
   PIMAGE_OPTIONAL_HEADER OH = &NT->OptionalHeader;
   printf("Image Base: 0x%X\n", OH->ImageBase);
   if (OH->ImageBase > 0)
     imageBase = OH->ImageBase;
-  IMAGE_DATA_DIRECTORY z = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+  IMAGE_DATA_DIRECTORY BaseRelocation = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
   if (OH->Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
   {
     printf("File is missing Optional Header signature\n");
@@ -181,6 +260,12 @@ bool PELoader::LoadPEFile(const char* filepath)
         SH[i].Name, SH[i].PointerToRawData, SH[i].VirtualAddress + imageBase,
         SH[NewIndex].Name, SH[NewIndex].PointerToRawData, SH[NewIndex].VirtualAddress + imageBase);
       it_copy->second.VirtualAddressCopy = SH[NewIndex].VirtualAddress + imageBase;
+      if (info.duplicate != SectionType::NONE)
+      {
+        SectionInfo infoCopy((const char*)SH[NewIndex].Name);
+        infoCopy.header = SH[NewIndex];
+        sectionMap.insert({ info.duplicate, infoCopy }); //no iterators are invalidated
+      }
 
       SetFilePointer(hFile, SH[i].PointerToRawData, NULL, FILE_BEGIN);
       if (!ReadFile(hFile, buffer, SH[i].SizeOfRawData, &bytesRead, NULL))
@@ -222,14 +307,22 @@ bool PELoader::LoadPEFile(const char* filepath)
           return false;
         }
         info.data = buffer;
+        /*
+        if (info.duplicate != NONE)
+        {
+          SectionInfo& infoCopy = sectionMap.at(info.duplicate);
+          infoCopy.data = new BYTE[header.SizeOfRawData];
+          ZeroMemory(infoCopy.data, header.SizeOfRawData);
+          memcpy(infoCopy.data, info.data, header.SizeOfRawData);
+        }
+        */
         info.header = header;
         info.initialized = TRUE;
         break;
       }
     }
-    //delete pByte;
   }
-
+  WriteDuplicatePEPatch(hFile, NT);
   CloseHandle(hFile);
   return true;
 }
