@@ -4,7 +4,7 @@
 #include <vector>
 #include <unordered_map>
 
-enum SectionType { NONE = 0, TEXT, TXT2, TXT, DATA, RELOC, RELO2 };
+enum SectionType { NONE = 0, TEXT, TXT2, TXT, DATA, RELOC, RELO2, RDATA };
 
 struct SectionInfo {
   SectionInfo(const char* name, const char* copy, SectionType duplicate = NONE) :
@@ -44,6 +44,7 @@ private:
     {TXT2,  SectionInfo(".txt2", ".txt3")},
     {TXT, SectionInfo(".txt")},
     {DATA, SectionInfo(".data")},
+    {RDATA, SectionInfo(".rdata")},
     {RELOC, SectionInfo(".reloc", ".relo2", RELO2)}
   };
 

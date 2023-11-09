@@ -135,6 +135,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Analyzer.h" />
+    <ClInclude Include="DPLAYERX.h" />
     <ClInclude Include="Patch.h" />
     <ClInclude Include="PELoader.h" />
   </ItemGroup>
