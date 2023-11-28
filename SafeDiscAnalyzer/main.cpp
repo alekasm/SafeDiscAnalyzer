@@ -81,12 +81,12 @@ int main(int argc, const char** argv)
 
   if (bypass)
   {
-    printf("Applying patches\n");
-    ApplyPatches(loader, magic);
+    printf("Applying bypass patches\n");
+    if (!ApplyPatches(loader, magic))
+      return 0;
   }
 
   bool result = loader.PatchPEFile(argv[1]);
-
   printf("Patch successful = %s\n", result ? "true" : "false");
   loader.Destroy();
   return 0;

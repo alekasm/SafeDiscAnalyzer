@@ -49,7 +49,7 @@ bool WriteData(HANDLE hFile, IMAGE_SECTION_HEADER header, PBYTE data)
 DWORD PELoader::WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT)
 {
   //This is some actual Frankenstein stuff.
-  //The relocation table whiuch used for decryption is fine for modification in the
+  //The relocation table which used for decryption is fine for modification in the
   //executable where the image base is at the desired location - not so much for 
   //DPLAYERX.DLL where the relocation table is needed.
 
@@ -111,6 +111,56 @@ DWORD PELoader::WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT)
   printf("Wrote new PE Header at 0x%X, using new relocation at: 0x%X\n",
     ntDuplicatePtr, relo2VAddress);
   return ntDuplicatePtr;
+}
+
+DWORD PELoader::ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT)
+{
+  //SectionInfo& info_reloc = sectionMap.find(SectionType::RELO2)->second;
+  SectionInfo& info_reloc = sectionMap.at(RELO2);
+  DWORD relo2VAddress = info_reloc.header.VirtualAddress;
+  int relo2Index = info_reloc.index;
+
+  PIMAGE_FILE_HEADER FH = &NT->FileHeader;
+  PIMAGE_OPTIONAL_HEADER OH = &NT->OptionalHeader;
+  PIMAGE_SECTION_HEADER SH = (PIMAGE_SECTION_HEADER)((PBYTE)OH + FH->SizeOfOptionalHeader);
+
+  //Update OptionalHeader entry
+  DWORD osize = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+  OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress = relo2VAddress;
+
+  //Update SectionHeader entry
+  DWORD shOriginalSize = SH[relo2Index].SizeOfRawData;
+  DWORD shNewSize = shOriginalSize * 2;
+  SH[relo2Index].SizeOfRawData = shNewSize;
+  info_reloc.header.SizeOfRawData = shNewSize;
+
+  //TODO not sure the difference between
+  //OH IMAGE_DATA_DIRECTORY size versus SECTION_HEADER size (virtual)
+  SH[relo2Index].Misc.VirtualSize = shNewSize;
+  info_reloc.header.Misc.VirtualSize = shNewSize;
+  OH->SizeOfImage = SH[relo2Index].VirtualAddress + SH[relo2Index].Misc.VirtualSize;
+  OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = shNewSize;
+
+  PBYTE oldData = info_reloc.data;
+  info_reloc.data = new BYTE[shNewSize];
+  PBYTE newData = info_reloc.data;
+  memset(newData, 0, shNewSize);
+  memcpy(newData, oldData, osize);
+  memcpy(&newData[osize], oldData, osize);
+  delete oldData;
+
+  printf("Duplicated relocation table with size 0x%X at 0x%X -> 0x%X\n",
+    osize,
+    SH[relo2Index].PointerToRawData,
+    SH[relo2Index].PointerToRawData + osize);
+
+  printf("Updated %s: VA=%0X,RVA=%0X,VSize=%0X,RDP=%0X,RSZ=%0X\n",
+    info_reloc.name,
+    SH[relo2Index].VirtualAddress, SH[relo2Index].VirtualAddress + imageBase,
+    SH[relo2Index].Misc.VirtualSize,
+    SH[relo2Index].PointerToRawData,
+    SH[relo2Index].SizeOfRawData);
+  return 1;
 }
 
 bool PELoader::PatchPEFile(const char* filepath)
@@ -195,7 +245,19 @@ bool PELoader::LoadPEFile(const char* filepath)
   printf("Image Base: 0x%X\n", OH->ImageBase);
   if (OH->ImageBase > 0)
     imageBase = OH->ImageBase;
-  IMAGE_DATA_DIRECTORY BaseRelocation = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+  IMAGE_DATA_DIRECTORY BaseRelocationTable = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+  IMAGE_DATA_DIRECTORY ImportAddressTable = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT];
+  IMAGE_DATA_DIRECTORY ImportTable = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+  printf("Base Relocation Table: 0x%X (size=0x%X)\n",
+    BaseRelocationTable.VirtualAddress,
+    BaseRelocationTable.Size);
+  printf("Import Address Table: 0x%X (size=0x%X)\n",
+    ImportAddressTable.VirtualAddress,
+    ImportAddressTable.Size);
+  printf("Import Table: 0x%X (size=0x%X)\n",
+    ImportTable.VirtualAddress,
+    ImportTable.Size);
+
   if (OH->Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
   {
     printf("File is missing Optional Header signature\n");
@@ -212,13 +274,12 @@ bool PELoader::LoadPEFile(const char* filepath)
   for (WORD i = 0; i < FH->NumberOfSections; ++i)
   {
     std::string name(reinterpret_cast<char const*>(SH[i].Name));
-    printf("%s: VA=%0X,RVA=%0X,VSize=%0X,RDP=%0X,RSZ=%0X,VSZ=%0X\n",
+    printf("%s: VA=%0X,RVA=%0X,VSize=%0X,RDP=%0X,RSZ=%0X\n",
       name.c_str(),
       SH[i].VirtualAddress, SH[i].VirtualAddress + imageBase,
       SH[i].Misc.VirtualSize,
       SH[i].PointerToRawData,
-      SH[i].SizeOfRawData,
-      SH[i].Misc.VirtualSize);
+      SH[i].SizeOfRawData);
 
     SectionMap::iterator it_copy = sectionMap.begin();
     for (; it_copy != sectionMap.end(); ++it_copy)
@@ -264,6 +325,7 @@ bool PELoader::LoadPEFile(const char* filepath)
       {
         SectionInfo infoCopy((const char*)SH[NewIndex].Name);
         infoCopy.header = SH[NewIndex];
+        infoCopy.index = NewIndex;
         sectionMap.insert({ info.duplicate, infoCopy }); //no iterators are invalidated
       }
 
@@ -307,22 +369,18 @@ bool PELoader::LoadPEFile(const char* filepath)
           return false;
         }
         info.data = buffer;
-        /*
-        if (info.duplicate != NONE)
-        {
-          SectionInfo& infoCopy = sectionMap.at(info.duplicate);
-          infoCopy.data = new BYTE[header.SizeOfRawData];
-          ZeroMemory(infoCopy.data, header.SizeOfRawData);
-          memcpy(infoCopy.data, info.data, header.SizeOfRawData);
-        }
-        */
         info.header = header;
         info.initialized = TRUE;
         break;
       }
     }
   }
-  WriteDuplicatePEPatch(hFile, NT);
+
+  //WriteDuplicatePEPatch(hFile, NT);
+  ExtendRelocationTable(hFile, NT);
+  //Update with the new header info
+  SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+  WriteFile(hFile, pByte, fileSize, &dw, NULL);
   CloseHandle(hFile);
   return true;
 }

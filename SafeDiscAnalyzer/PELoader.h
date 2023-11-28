@@ -24,6 +24,7 @@ struct SectionInfo {
   IMAGE_SECTION_HEADER header = { 0 };
   BOOL initialized = FALSE;
   const SectionType duplicate;
+  int index = -1;
 };
 
 typedef std::unordered_map<SectionType, SectionInfo> SectionMap;
@@ -37,9 +38,10 @@ struct PELoader
   SectionMap& GetSectionMap() { return sectionMap; }
 private:
   DWORD WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT);
+  DWORD ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT);
   const DWORD WIN32_PE_ENTRY = 0x400000;
   DWORD imageBase = WIN32_PE_ENTRY;
-   SectionMap sectionMap = {
+  SectionMap sectionMap = {
     {TEXT, SectionInfo(".text", ".tex2")},
     {TXT2,  SectionInfo(".txt2", ".txt3")},
     {TXT, SectionInfo(".txt")},

@@ -1,6 +1,6 @@
 #include "Patch.h"
 
-//#define DEBUGGING_ENABLED
+#define DEBUGGING_ENABLED
 //42A9D8 = ReadProcessMemory
 //42A9F0 = WriteProcessMemory
 //42AA08 = VirtualProtect
@@ -457,10 +457,95 @@ void txt2_ReadMZPEHeaderPatch(PELoader& loader, bool patch)
   size_t sectionOffsetVirtual = offsets.at(0) - 0xC; //function start
   size_t sectionOffset = sectionOffsetVirtual - info.VirtualAddress;
   printf("Found ReadMZPEHeader at 0x%X, patching: %s\n", sectionOffsetVirtual, sbool(patch));
+  if (!patch) return;
   size_t patchOffset = sectionOffset + 0x1A;
   memcpy(&info.data[patchOffset],
     "\x8B\x46\x38", //mov eax, dword ptr [esi + 0x38]
     3);
+}
+
+void DPlayerHijack(PELoader& loader, bool patch)
+{
+  printf("Checking for dplayerx.dll...\n");
+  //This allows to use the DPLAYERY.DLL man-in-the middle dll for debugging
+  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RDATA);
+  SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
+  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
+  std::vector<uint32_t> reloc_offsets = Analyzer::FindSectionPattern(info_reloc, 
+    "dplayerx.dll", "xxxxxxxxxxxx", loader.GetImageBase());
+  if (reloc_offsets.size() != 1)
+  {
+    printf(".rdata does not have dplayerx.dll, skipping dplayer hijack\n");
+    return;
+  }
+
+  uint32_t stringVirtualAddress = reloc_offsets.at(0);
+  printf("Found dplayerx.dll at 0x%X\n", stringVirtualAddress);
+  uint32_t stringOffset = stringVirtualAddress - info_reloc.VirtualAddress;
+
+  std::vector<uint32_t> txt2_patch1 = Analyzer::FindSectionPattern(info_txt2,
+    "\x83\xC4\x04\x00\x00\x00\x6A\x67", "xxx???xx", loader.GetImageBase());
+  if (txt2_patch1.empty())
+  {
+    printf("Found dplayerx.dll, but failed to find patch section 1\n");
+    return;
+  }
+  uint32_t patch1_offset = txt2_patch1.at(0) - 0x9;
+  printf("Found hijack offset 1 at 0x%X\n", patch1_offset);
+  patch1_offset -= info_txt2.VirtualAddress;
+
+  std::vector<uint32_t> text_patch2 = Analyzer::FindSectionPattern(info_text,
+    "\x83\xC4\x04\xA3\x00\x00\x00\x00\x6A\x01", "xxxx????xx", loader.GetImageBase());
+  if (text_patch2.empty())
+  {
+    printf("Found dplayerx.dll, but failed to find patch section 2\n");
+    return;
+  }
+
+  uint32_t patch2_offset = text_patch2.at(0) - 0xF;
+  printf("Found hijack offset 2 at 0x%X\n", patch2_offset);
+  patch2_offset -= info_text.VirtualAddress;
+
+  std::vector<uint32_t> getmodule_offsets = Analyzer::FindSectionPattern(info_txt2,
+    "\x50\xFF\x15\x00\x00\x00\x00\x89\x45\xF0", "xxx????xxx", loader.GetImageBase());
+  if (getmodule_offsets.empty())
+  {
+    printf("Found dplayerx.dll, but failed to find GetModuleHandleA\n");
+    return;
+  }
+
+  //As suspected even with FF15 we will need a relocation patch
+  uint32_t getmodule_offset = getmodule_offsets.at(0) - 0x4;
+  printf("Found GetModuleHandleA offset at 0x%X\n", getmodule_offset);
+  uint32_t getmodule_addr = 0;
+  getmodule_offset -= info_txt2.VirtualAddress;
+  memcpy(&getmodule_addr, &info_txt2.data[getmodule_offset], 4);
+  printf("GetModuleHandleA: 0x%X\n", getmodule_addr);
+
+
+  memcpy(&info_reloc.data[stringOffset], "dplayery.dll", 12);
+
+  memcpy(&info_txt2.data[patch1_offset],
+    "\x68\x00\x00\x00\x00"  //push dplayery.dll
+    "\xFF\x15\x00\x00\x00\x00"  //call GetModuleHandleA
+    "\x90",             //nop nop
+    12);
+  memcpy(&info_txt2.data[patch1_offset + 1], &stringVirtualAddress, 4);
+  memcpy(&info_txt2.data[patch1_offset + 7], &getmodule_addr, 4);
+
+
+  memcpy(&info_text.data[patch2_offset],
+    "\x68\x00\x00\x00\x00",  //push dplayery.dll
+    5);
+  memcpy(&info_text.data[patch2_offset + 1], &stringVirtualAddress, 4);
+  memcpy(&info_text.data[patch2_offset + 0xA],
+    "\xFF\x15\x00\x00\x00\x00"  //call GetModuleHandleA
+    "\x90\x90",
+    8);
+  memcpy(&info_text.data[patch2_offset + 0xA + 2], &getmodule_addr, 4);
+
+  printf("Rename your patched DPLAYERX.DLL to DPLAYERY.DLL\n");
+
 }
 
 struct RelocationData {
@@ -475,23 +560,43 @@ bool UpdateRelocationTable(PELoader& loader, std::vector<RelocationData>* out = 
 
   SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
   SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
-  //Search for Base Relocation Block, then add 0x8 for the entries
-  //TODO: actually walk the tables correctly
-  uint32_t VirtualAddress = info_text.VirtualAddress - loader.GetImageBase();
   uint32_t VirtualSize = info_text.header.Misc.VirtualSize;
   uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - loader.GetImageBase();
-  char buffer[4];
-  memset(buffer, 0, sizeof(buffer));
-  memcpy(&buffer[0], &VirtualAddress, 4);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info_reloc, buffer, "xxxx", 0);
-  if (offsets.size() == 0)
+
+  uint32_t VirtualAddressScan = info_text.VirtualAddress - loader.GetImageBase();
+  unsigned int table_offset = 0;
+  int hits = 0;
+ 
+  while (table_offset < info_reloc.header.SizeOfRawData)
   {
-    printf("Failed to find relocation table for RVA: 0x%X (results=%d)\n", VirtualAddress, offsets.size());
+    uint32_t VirtualAddress = 0;
+    uint32_t EntrySize = 0;
+    memcpy(&VirtualAddress, &info_reloc.data[table_offset], 4);
+    memcpy(&EntrySize, &info_reloc.data[table_offset + 4], 4);
+    if (VirtualAddress == VirtualAddressScan)
+    {
+      hits++;
+      if (hits == 1)
+        printf("Found original .text relocation at 0x%X\n",
+          table_offset + info_reloc.header.PointerToRawData);
+      if (hits == 2)
+      {
+        printf("Found duplicate .text relocation at 0x%X\n",
+          table_offset + info_reloc.header.PointerToRawData);
+        break;
+      }
+    }
+    table_offset += EntrySize;
+  }
+
+  if (hits != 2)
+  {
+    printf("Failed to find relocation entry for .text starting at 0x%X\n", VirtualAddressScan);
     return false;
   }
-  printf("Found relocation table at 0x%X, VirtualSize=0X%X\n", offsets.at(0), VirtualSize);
+
+
   int32_t vsize = VirtualSize;
-  unsigned int table_offset = offsets.at(0);
   uint32_t entry_va = 0;
   uint32_t entry_size = 0;
   unsigned int va_override = VirtualAddressCopy;
@@ -510,7 +615,7 @@ bool UpdateRelocationTable(PELoader& loader, std::vector<RelocationData>* out = 
     va_override += data_size;
 
     memcpy(&info_reloc.data[table_offset], &va_override, 4);
-    printf("Found relocation at 0x%X (0x%X): 0x%X -> 0x%X\n",
+    printf("Updating relocation at 0x%X (0x%X): 0x%X -> 0x%X\n",
       table_offset,
       table_offset + info_reloc.header.PointerToRawData,
       entry_va, va_override);
@@ -531,7 +636,7 @@ bool UpdateRelocationTable(PELoader& loader, std::vector<RelocationData>* out = 
 }
 
 
-void ApplyPatches(PELoader& loader, bool magic)
+bool ApplyPatches(PELoader& loader, bool magic)
 {
   data_StringPatch(loader, true);
   text_CanOpenSecdrvPatch(loader, !magic);
@@ -546,8 +651,10 @@ void ApplyPatches(PELoader& loader, bool magic)
   txt2_drvmgtPatch(loader, true);
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
-  txt2_ReadMZPEHeaderPatch(loader, true);
-  UpdateRelocationTable(loader);
+  txt2_ReadMZPEHeaderPatch(loader, false);
+  if (!UpdateRelocationTable(loader)) return false;
+  DPlayerHijack(loader, true);
+  return true;
 }
 
 //TODO: relocation patching now works, but we need to re-adjust 
@@ -632,6 +739,9 @@ iter_firstpass:
     decrypt_buffer[i] ^= (decryption_skew >> 24);
     decrypt_buffer[i] ^= info_txt2.data[i];
     decryption_skew += decrypt_buffer[i] & 0xFF;
+#ifdef DEBUGGING_ENABLED
+    printf("Decryption Skew: 0x%X\n", decryption_skew);
+#endif
     if ((i + 1) % 0x10 == 0) //421DB9
       decryption_skew += 0x400; //dr7 result from secdrv driver
     if ((i + 1) % 0x1000 == 0)
