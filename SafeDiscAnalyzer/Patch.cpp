@@ -548,92 +548,16 @@ void DPlayerHijack(PELoader& loader, bool patch)
 
 }
 
+/*
 struct RelocationData {
   uint32_t size;
   uint32_t offset;
   uint32_t end_offset;
   uint32_t entry;
 };
-
-bool UpdateRelocationTable(PELoader& loader, std::vector<RelocationData>* out = nullptr)
-{
-
-  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
-  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
-  uint32_t VirtualSize = info_text.header.Misc.VirtualSize;
-  uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - loader.GetImageBase();
-
-  uint32_t VirtualAddressScan = info_text.VirtualAddress - loader.GetImageBase();
-  unsigned int table_offset = 0;
-  int hits = 0;
- 
-  while (table_offset < info_reloc.header.SizeOfRawData)
-  {
-    uint32_t VirtualAddress = 0;
-    uint32_t EntrySize = 0;
-    memcpy(&VirtualAddress, &info_reloc.data[table_offset], 4);
-    memcpy(&EntrySize, &info_reloc.data[table_offset + 4], 4);
-    if (VirtualAddress == VirtualAddressScan)
-    {
-      hits++;
-      if (hits == 1)
-        printf("Found original .text relocation at 0x%X\n",
-          table_offset + info_reloc.header.PointerToRawData);
-      if (hits == 2)
-      {
-        printf("Found duplicate .text relocation at 0x%X\n",
-          table_offset + info_reloc.header.PointerToRawData);
-        break;
-      }
-    }
-    table_offset += EntrySize;
-  }
-
-  if (hits != 2)
-  {
-    printf("Failed to find relocation entry for .text starting at 0x%X\n", VirtualAddressScan);
-    return false;
-  }
+*/
 
 
-  int32_t vsize = VirtualSize;
-  uint32_t entry_va = 0;
-  uint32_t entry_size = 0;
-  unsigned int va_override = VirtualAddressCopy;
-  uint32_t total_offset = 0;
-  uint32_t last_va = 0;
-  while (vsize > 0)
-  {
-    memcpy(&entry_va, &info_reloc.data[table_offset], 4);
-    memcpy(&entry_size, &info_reloc.data[table_offset + 4], 4);
-    uint32_t data_size = 0;
-
-    //relocation tables can skip over pages
-    if (last_va > 0)
-      data_size = entry_va - last_va;
-    last_va = entry_va;
-    va_override += data_size;
-
-    memcpy(&info_reloc.data[table_offset], &va_override, 4);
-    printf("Updating relocation at 0x%X (0x%X): 0x%X -> 0x%X\n",
-      table_offset,
-      table_offset + info_reloc.header.PointerToRawData,
-      entry_va, va_override);
-    if (out != nullptr)
-    {
-      RelocationData data;
-      data.size = entry_size - 8;
-      data.offset = table_offset;
-      data.end_offset = table_offset + entry_size;
-      data.entry = entry_va;
-      out->push_back(data);
-    }
-    vsize -= data_size > 0 ? data_size : 0x1000;
-    table_offset += entry_size;
-    total_offset += entry_size;
-  }
-  return true;
-}
 
 
 bool ApplyPatches(PELoader& loader, bool magic)
@@ -652,7 +576,7 @@ bool ApplyPatches(PELoader& loader, bool magic)
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
   txt2_ReadMZPEHeaderPatch(loader, false);
-  if (!UpdateRelocationTable(loader)) return false;
+  //if (!UpdateRelocationTable(loader, nullptr)) return false;
   DPlayerHijack(loader, true);
   return true;
 }
@@ -666,9 +590,10 @@ void Decrypt(PELoader& loader, int showOffset, int showSize)
   SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
   SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
 
-  std::vector<RelocationData> reloc_data;
-  if(!UpdateRelocationTable(loader, &reloc_data))
-    return;
+  std::vector<RelocationData> reloc_data = loader.GetTextCopyRelocations();
+ 
+  //if(!UpdateRelocationTable(loader, nullptr, &reloc_data))
+  //  return;
 
   //txt section is the encrypted data that needs to be decrypted.
   //First pass prepares the encrypted txt section, xor with a rolling key - 8 bytes

@@ -27,6 +27,13 @@ struct SectionInfo {
   int index = -1;
 };
 
+struct RelocationData {
+  uint32_t size;
+  uint32_t offset;
+  uint32_t end_offset;
+  uint32_t entry;
+};
+
 typedef std::unordered_map<SectionType, SectionInfo> SectionMap;
 struct PELoader
 {
@@ -36,9 +43,11 @@ struct PELoader
   void Destroy();
   DWORD GetImageBase() { return imageBase; }
   SectionMap& GetSectionMap() { return sectionMap; }
+  std::vector<RelocationData> GetTextCopyRelocations() { return textCopyRelocations; }
 private:
   DWORD WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT);
   DWORD ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT);
+  bool UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH);
   const DWORD WIN32_PE_ENTRY = 0x400000;
   DWORD imageBase = WIN32_PE_ENTRY;
   SectionMap sectionMap = {
@@ -49,6 +58,6 @@ private:
     {RDATA, SectionInfo(".rdata")},
     {RELOC, SectionInfo(".reloc", ".relo2", RELO2)}
   };
-
+  std::vector<RelocationData> textCopyRelocations;
 };
 

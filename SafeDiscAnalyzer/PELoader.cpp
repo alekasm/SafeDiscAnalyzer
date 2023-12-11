@@ -46,6 +46,11 @@ bool WriteData(HANDLE hFile, IMAGE_SECTION_HEADER header, PBYTE data)
   return true;
 }
 
+DWORD align(DWORD addr, DWORD align)
+{
+  return (addr + align) - (addr % align);
+}
+
 DWORD PELoader::WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT)
 {
   //This is some actual Frankenstein stuff.
@@ -113,6 +118,156 @@ DWORD PELoader::WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT)
   return ntDuplicatePtr;
 }
 
+//#define REMOVE_DUPLICATE_RELOCATION_ENTRIES
+bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
+{
+  SectionInfo& info_reloc = sectionMap.at(SectionType::RELO2);
+  SectionInfo& info_text = sectionMap.at(SectionType::TEXT);
+  uint32_t VirtualSize = info_text.header.Misc.VirtualSize;
+  uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - GetImageBase();
+
+  uint32_t VirtualAddressScan = info_text.VirtualAddress - GetImageBase();
+  uint32_t table_offset = 0;
+  uint32_t table_offset_iter = 0;
+  bool found_entry = false;
+
+#ifdef REMOVE_DUPLICATE_RELOCATION_ENTRIES
+  uint32_t VirtualAddressStart = 0;
+  uint32_t next_table_offset = 0;
+  //uint32_t next_table_offset_start_size = 0;
+#endif
+
+  while (table_offset_iter < info_reloc.header.SizeOfRawData)
+  {
+    uint32_t VirtualAddress = 0;
+    uint32_t EntrySize = 0;
+    memcpy(&VirtualAddress, &info_reloc.data[table_offset_iter], 4);
+    memcpy(&EntrySize, &info_reloc.data[table_offset_iter + 4], 4);
+
+#ifdef REMOVE_DUPLICATE_RELOCATION_ENTRIES
+    if (VirtualAddressStart == 0)
+      VirtualAddressStart = VirtualAddress;
+    else if (VirtualAddressStart == VirtualAddress)
+    {
+      next_table_offset = table_offset_iter;
+      break;
+    }
+#endif
+
+    if (VirtualAddress == VirtualAddressScan)
+    {
+      table_offset = table_offset_iter;
+      printf("Found original .text relocation at 0x%X\n",
+        table_offset + info_reloc.header.PointerToRawData);
+      found_entry = true;
+      break;
+    }
+    table_offset_iter += EntrySize;
+  }
+
+
+  if (!found_entry)
+  {
+    printf("Failed to find relocation entry for .text starting at 0x%X\n", VirtualAddressScan);
+    return false;
+  }
+
+
+  //uint32_t extended_size = info_reloc.header.SizeOfRawData - next_table_offset_start;
+  //uint32_t temp_size = info_reloc.header.SizeOfRawData;
+  const uint32_t OldTableSize = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+  uint32_t next_table_offset = OldTableSize;
+  PBYTE extended_copy = new BYTE[info_reloc.header.SizeOfRawData * 2];
+  memset(extended_copy, 0, info_reloc.header.SizeOfRawData);
+  memcpy(extended_copy, info_reloc.data, OldTableSize);
+
+
+  // memcpy(&extended_copy[next_table_offset_start])
+  printf("Start of duplicate table at 0x%X\n",
+    next_table_offset + info_reloc.header.PointerToRawData);
+  memset(&info_reloc.data[next_table_offset], 0, info_reloc.header.SizeOfRawData - next_table_offset);
+
+  int32_t vsize = VirtualSize;
+  uint32_t entry_va = 0;
+  uint32_t entry_size = 0;
+  uint32_t size_added = 0;
+  unsigned int va_override = VirtualAddressCopy;
+  uint32_t total_offset = 0;
+  uint32_t last_va = 0;
+  while (vsize > 0)
+  {
+    memcpy(&entry_va, &info_reloc.data[table_offset], 4);
+    memcpy(&entry_size, &info_reloc.data[table_offset + 4], 4);
+    uint32_t data_size = 0;
+
+    //relocation tables can skip over pages
+    if (last_va > 0)
+      data_size = entry_va - last_va;
+    last_va = entry_va;
+    va_override += data_size;
+
+    memcpy(&extended_copy[next_table_offset], &info_reloc.data[table_offset], entry_size);
+    memcpy(&extended_copy[next_table_offset], &va_override, 4);
+    size_added += entry_size;
+
+    printf("Copying data from 0x%X -> 0x%X\n",
+      table_offset + info_reloc.header.PointerToRawData,
+      next_table_offset + info_reloc.header.PointerToRawData);
+
+    //memcpy(&info_reloc.data[table_offset], &va_override, 4);
+    printf("Updating relocation at 0x%X (0x%X): 0x%X -> 0x%X\n",
+      table_offset,
+      table_offset + info_reloc.header.PointerToRawData,
+      entry_va, va_override);
+
+    RelocationData data;
+    data.size = entry_size - 8;
+    data.offset = table_offset;
+    data.end_offset = table_offset + entry_size;
+    data.entry = entry_va;
+    textCopyRelocations.push_back(data);
+
+    vsize -= data_size > 0 ? data_size : 0x1000;
+    table_offset += entry_size;
+    next_table_offset += entry_size;
+    total_offset += entry_size;
+  }
+
+  uint32_t NewTableSize = OldTableSize + size_added;
+  PBYTE new_table = new BYTE[NewTableSize];
+  memset(new_table, 0, NewTableSize);
+  memcpy(new_table, extended_copy, NewTableSize);
+  delete[] extended_copy;
+  extended_copy = nullptr;
+
+  delete info_reloc.data;
+  info_reloc.data = new_table;
+
+  OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = NewTableSize;
+  printf("Extended .reloc table size from 0x%X -> 0x%X\n", OldTableSize,
+    OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size);
+ 
+  if (NewTableSize > info_reloc.header.SizeOfRawData)
+  {
+    DWORD oldSize = info_reloc.header.SizeOfRawData;
+    info_reloc.header.SizeOfRawData = align(NewTableSize, OH->FileAlignment);
+    printf("Increased .reloc SizeOfRawData: 0x%X -> 0x%X\n",
+      oldSize, info_reloc.header.SizeOfRawData);
+    DWORD rawDifference = info_reloc.header.SizeOfRawData - oldSize;
+    OH->SizeOfImage = OH->SizeOfImage + rawDifference;
+  }
+
+  if (NewTableSize > info_reloc.header.Misc.VirtualSize)
+  {
+    DWORD oldSize = info_reloc.header.Misc.VirtualSize;
+    info_reloc.header.Misc.VirtualSize = align(NewTableSize, OH->SectionAlignment);
+    printf("Increased .reloc VirtualSize: 0x%X -> 0x%X\n",
+      oldSize, info_reloc.header.Misc.VirtualSize);
+  }
+
+  return true;
+}
+
 DWORD PELoader::ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT)
 {
   //SectionInfo& info_reloc = sectionMap.find(SectionType::RELO2)->second;
@@ -126,21 +281,30 @@ DWORD PELoader::ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT)
 
   //Update OptionalHeader entry
   DWORD osize = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+  printf("Moving .reloc from 0x%X -> 0x%X\n",
+    OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress,
+    relo2VAddress);
   OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress = relo2VAddress;
+  UpdateRelocationTable(OH);
+  SH[relo2Index].Misc.VirtualSize = info_reloc.header.Misc.VirtualSize;
+  SH[relo2Index].SizeOfRawData = info_reloc.header.SizeOfRawData;
 
   //Update SectionHeader entry
-  DWORD shOriginalSize = SH[relo2Index].SizeOfRawData;
-  DWORD shNewSize = shOriginalSize * 2;
-  SH[relo2Index].SizeOfRawData = shNewSize;
-  info_reloc.header.SizeOfRawData = shNewSize;
+  //DWORD shOriginalSize = SH[relo2Index].SizeOfRawData;
+  //DWORD shNewSize = shOriginalSize * 2;
+  //SH[relo2Index].SizeOfRawData = shNewSize;
+  //info_reloc.header.SizeOfRawData = shNewSize;
 
   //TODO not sure the difference between
   //OH IMAGE_DATA_DIRECTORY size versus SECTION_HEADER size (virtual)
-  SH[relo2Index].Misc.VirtualSize = shNewSize;
-  info_reloc.header.Misc.VirtualSize = shNewSize;
-  OH->SizeOfImage = SH[relo2Index].VirtualAddress + SH[relo2Index].Misc.VirtualSize;
-  OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = shNewSize;
-
+  //SH[relo2Index].Misc.VirtualSize = shNewSize;
+  //info_reloc.header.Misc.VirtualSize = shNewSize;
+  //OH->SizeOfImage = SH[relo2Index].VirtualAddress + SH[relo2Index].Misc.VirtualSize;
+  //printf("Increasing .reloc size from 0x%X -> 0x%X\n",
+  //  OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size,
+  //  shNewSize);
+  //OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = shNewSize;
+  /*
   PBYTE oldData = info_reloc.data;
   info_reloc.data = new BYTE[shNewSize];
   PBYTE newData = info_reloc.data;
@@ -148,6 +312,7 @@ DWORD PELoader::ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT)
   memcpy(newData, oldData, osize);
   memcpy(&newData[osize], oldData, osize);
   delete oldData;
+  */
 
   printf("Duplicated relocation table with size 0x%X at 0x%X -> 0x%X\n",
     osize,
@@ -188,11 +353,6 @@ bool PELoader::PatchPEFile(const char* filepath)
   return true;
 }
 
-
-DWORD align(DWORD addr, DWORD align)
-{
-  return (addr + align) - (addr % align);
-}
 
 bool PELoader::LoadPEFile(const char* filepath)
 {
