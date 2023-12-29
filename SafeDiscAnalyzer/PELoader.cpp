@@ -118,24 +118,17 @@ DWORD PELoader::WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT)
   return ntDuplicatePtr;
 }
 
-//#define REMOVE_DUPLICATE_RELOCATION_ENTRIES
+
 bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
 {
   SectionInfo& info_reloc = sectionMap.at(SectionType::RELO2);
   SectionInfo& info_text = sectionMap.at(SectionType::TEXT);
   uint32_t VirtualSize = info_text.header.Misc.VirtualSize;
   uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - GetImageBase();
-
   uint32_t VirtualAddressScan = info_text.VirtualAddress - GetImageBase();
   uint32_t table_offset = 0;
   uint32_t table_offset_iter = 0;
   bool found_entry = false;
-
-#ifdef REMOVE_DUPLICATE_RELOCATION_ENTRIES
-  uint32_t VirtualAddressStart = 0;
-  uint32_t next_table_offset = 0;
-  //uint32_t next_table_offset_start_size = 0;
-#endif
 
   while (table_offset_iter < info_reloc.header.SizeOfRawData)
   {
@@ -143,16 +136,6 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
     uint32_t EntrySize = 0;
     memcpy(&VirtualAddress, &info_reloc.data[table_offset_iter], 4);
     memcpy(&EntrySize, &info_reloc.data[table_offset_iter + 4], 4);
-
-#ifdef REMOVE_DUPLICATE_RELOCATION_ENTRIES
-    if (VirtualAddressStart == 0)
-      VirtualAddressStart = VirtualAddress;
-    else if (VirtualAddressStart == VirtualAddress)
-    {
-      next_table_offset = table_offset_iter;
-      break;
-    }
-#endif
 
     if (VirtualAddress == VirtualAddressScan)
     {
@@ -165,24 +148,18 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
     table_offset_iter += EntrySize;
   }
 
-
   if (!found_entry)
   {
     printf("Failed to find relocation entry for .text starting at 0x%X\n", VirtualAddressScan);
     return false;
   }
 
-
-  //uint32_t extended_size = info_reloc.header.SizeOfRawData - next_table_offset_start;
-  //uint32_t temp_size = info_reloc.header.SizeOfRawData;
   const uint32_t OldTableSize = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
   uint32_t next_table_offset = OldTableSize;
   PBYTE extended_copy = new BYTE[info_reloc.header.SizeOfRawData * 2];
   memset(extended_copy, 0, info_reloc.header.SizeOfRawData);
   memcpy(extended_copy, info_reloc.data, OldTableSize);
 
-
-  // memcpy(&extended_copy[next_table_offset_start])
   printf("Start of duplicate table at 0x%X\n",
     next_table_offset + info_reloc.header.PointerToRawData);
   memset(&info_reloc.data[next_table_offset], 0, info_reloc.header.SizeOfRawData - next_table_offset);
@@ -214,7 +191,6 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
       table_offset + info_reloc.header.PointerToRawData,
       next_table_offset + info_reloc.header.PointerToRawData);
 
-    //memcpy(&info_reloc.data[table_offset], &va_override, 4);
     printf("Updating relocation at 0x%X (0x%X): 0x%X -> 0x%X\n",
       table_offset,
       table_offset + info_reloc.header.PointerToRawData,
@@ -288,31 +264,6 @@ DWORD PELoader::ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT)
   UpdateRelocationTable(OH);
   SH[relo2Index].Misc.VirtualSize = info_reloc.header.Misc.VirtualSize;
   SH[relo2Index].SizeOfRawData = info_reloc.header.SizeOfRawData;
-
-  //Update SectionHeader entry
-  //DWORD shOriginalSize = SH[relo2Index].SizeOfRawData;
-  //DWORD shNewSize = shOriginalSize * 2;
-  //SH[relo2Index].SizeOfRawData = shNewSize;
-  //info_reloc.header.SizeOfRawData = shNewSize;
-
-  //TODO not sure the difference between
-  //OH IMAGE_DATA_DIRECTORY size versus SECTION_HEADER size (virtual)
-  //SH[relo2Index].Misc.VirtualSize = shNewSize;
-  //info_reloc.header.Misc.VirtualSize = shNewSize;
-  //OH->SizeOfImage = SH[relo2Index].VirtualAddress + SH[relo2Index].Misc.VirtualSize;
-  //printf("Increasing .reloc size from 0x%X -> 0x%X\n",
-  //  OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size,
-  //  shNewSize);
-  //OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = shNewSize;
-  /*
-  PBYTE oldData = info_reloc.data;
-  info_reloc.data = new BYTE[shNewSize];
-  PBYTE newData = info_reloc.data;
-  memset(newData, 0, shNewSize);
-  memcpy(newData, oldData, osize);
-  memcpy(&newData[osize], oldData, osize);
-  delete oldData;
-  */
 
   printf("Duplicated relocation table with size 0x%X at 0x%X -> 0x%X\n",
     osize,

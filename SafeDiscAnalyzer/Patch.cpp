@@ -1,6 +1,6 @@
 #include "Patch.h"
 
-#define DEBUGGING_ENABLED
+//#define DEBUGGING_ENABLED
 //42A9D8 = ReadProcessMemory
 //42A9F0 = WriteProcessMemory
 //42AA08 = VirtualProtect
@@ -41,14 +41,14 @@ void data_StringPatch(PELoader& loader,  bool patch)
 
   for (uint32_t offset : txt2_offsets)
   {
-    printf("Found .txt2 at 0x%X, patching: %s\n", offset, sbool(patch));
+    printf("[.data] Found .txt2 at 0x%X, patching: %s\n", offset, sbool(patch));
     if (patch)
       memcpy(&info.data[offset - info.VirtualAddress], ".txt3", 6);
   }
 
   for (uint32_t offset : text_offsets)
   {
-    printf("Found .text at 0x%X, patching: %s\n", offset, sbool(patch));
+    printf("[.data] Found .text at 0x%X, patching: %s\n", offset, sbool(patch));
     if (patch)
       memcpy(&info.data[offset - info.VirtualAddress], ".tex2", 6);
   }
@@ -80,7 +80,7 @@ void txt2_drvmgtPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for drvmgt\n");
     return;
   }
-  printf("Found drvmgt at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.txt2] Found drvmgt at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
@@ -108,7 +108,7 @@ void text_CanOpenSecdrvPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for CanOpenSecdrv\n");
     return;
   }
-  printf("Found CanOpenSecdrv at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.text] Found CanOpenSecdrv at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
@@ -139,7 +139,7 @@ void text_SecdrvProcessIoctlPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for SecdrvProcessIoctl\n");
     return;
   }
-  printf("Found SecdrvProcessIoctl at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.text] Found SecdrvProcessIoctl at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   if (!patch) return;
   //We will use this function as free space to write code that will populate the IoctlBuffer with the expected
   //values. Luckily there's just a magic number - 0x400. The offset is at the outbuffer section + 410/414 which ends up
@@ -175,7 +175,8 @@ void txt2_AddMagicSkewValuePatch(PELoader& loader,  bool patch)
     return;
   }  
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  printf("Found AddMagicSkewValue at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.text] Found AddMagicSkewValue at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t start = sectionOffset + 0x13;
   int DecryptionValueWithSkew;
   memcpy(&DecryptionValueWithSkew, &info.data[sectionOffset - 0xD], 4);
@@ -204,7 +205,8 @@ void text_SecdrvStatusMessagePatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for SecdrvStatusMessage\n");
     return;
   }
-  printf("Found SecdrvStatusMessage at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.text] Found SecdrvStatusMessage at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
@@ -235,7 +237,8 @@ void text_TickCountLowPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for TickCountLow\n");
     return;
   }
-  printf("Found TickCountLow at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.text] Found TickCountLow at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xEB", //jbe -> jmp
@@ -265,7 +268,8 @@ void txt2_BeingDebuggedPEBPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for BeingDebuggedPEB\n");
     return;
   }
-  printf("Found BeingDebuggedPEB at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.txt2] Found BeingDebuggedPEB at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x33\xC0"                 //xor eax, eax
@@ -293,7 +297,8 @@ void txt2_IsBeingDebuggedPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for IsBeingDebugged\n");
     return;
   }
-  printf("Found IsBeingDebugged at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.txt2] Found IsBeingDebugged at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x33\xC0"                 //xor eax, eax
@@ -323,7 +328,8 @@ void txt2_NTQueryProcessInformationPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for NTQueryProcessInformation\n");
     return;
   }
-  printf("Found NTQueryProcessInformation at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.txt2] Found NTQueryProcessInformation at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xEB\x3D"                 //jmp 0x423C96
@@ -350,7 +356,8 @@ void txt2_SoftICEDebuggerCheck(PELoader& loader,  bool patch)
     printf("Expected to find one result for SoftICEDebugger\n");
     return;
   }
-  printf("Found SoftICEDebugger at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.txt2] Found SoftICEDebugger at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - 0x12 - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\xB8\xFF\xFF\xFF\xFF"          //mov eax, 0xFFFFFFFF
@@ -384,7 +391,8 @@ void text_ApplyFauxCDCheckPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for FauxCDCheck\n");
     return;
   }
-  printf("Found FauxCDCheck at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.text] Found FauxCDCheck at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   memcpy(&info.data[sectionOffset],
     "\x66\xB8\x01\x00" //mov ax, 1
@@ -408,7 +416,8 @@ void txt2_ApplyInterruptDebugPatch(PELoader& loader,  bool patch)
     printf("Expected to find one result for InterruptDebug\n");
     return;
   }
-  printf("Found InterruptDebug at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  printf("[.txt2] Found InterruptDebug at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   int dvalue;
   memcpy(&dvalue, &info.data[sectionOffset + 2], 4);
@@ -418,50 +427,6 @@ void txt2_ApplyInterruptDebugPatch(PELoader& loader,  bool patch)
     "\x90\x90\x90\x90\x90",                    //nop (5) remove interrupt exception test
     15);
   memcpy(&info.data[sectionOffset + 2] , &dvalue, 4);
-}
-
-void txt2_ReadMZPEHeaderPatch(PELoader& loader, bool patch)
-
-{
-  //hmm this didnt fix the issue at 4171C8/413598, its still using the original reloc value
-  //0x41F480 - ReadPETableForSection
-  //ReadMZPEHeader is called and this buffer is stored on the stack
-  //For SectionType = 8, the relocation vaddress is taken from the stack
-  //replace this with our new relocation table that's modified.
-  /*
-  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
-    "\x8B\x84\x24\xE4\x00\x00\x00\x50", "xxxxxxxx", loader.GetImageBase());
-  if (offsets.size() != 1)
-  {
-    printf("Expected to find one result for InterruptDebug\n");
-    return;
-  }
-  printf("Found RelocationLookup at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
-  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  info.data[sectionOffset] = 0xB8; //change encoding for mov imm32
-  SectionInfo& reloc_info = loader.GetSectionMap().at(SectionType::RELO2);
-  DWORD table_copy = reloc_info.header.VirtualAddress;
-  memcpy(&info.data[sectionOffset + 1], &table_copy, 4);
-  info.data[sectionOffset + 5] = 0x90;
-  info.data[sectionOffset + 6] = 0x90;
-  */
-  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
-    "\x6A\x40\x6A\x00", "xxxx", loader.GetImageBase());
-  if (offsets.size() != 1)
-  {
-    printf("Expected to find one result for ReadMZPEHeader\n");
-    return;
-  }
-  size_t sectionOffsetVirtual = offsets.at(0) - 0xC; //function start
-  size_t sectionOffset = sectionOffsetVirtual - info.VirtualAddress;
-  printf("Found ReadMZPEHeader at 0x%X, patching: %s\n", sectionOffsetVirtual, sbool(patch));
-  if (!patch) return;
-  size_t patchOffset = sectionOffset + 0x1A;
-  memcpy(&info.data[patchOffset],
-    "\x8B\x46\x38", //mov eax, dword ptr [esi + 0x38]
-    3);
 }
 
 void DPlayerHijack(PELoader& loader, bool patch)
@@ -480,7 +445,7 @@ void DPlayerHijack(PELoader& loader, bool patch)
   }
 
   uint32_t stringVirtualAddress = reloc_offsets.at(0);
-  printf("Found dplayerx.dll at 0x%X\n", stringVirtualAddress);
+  printf("[.rdata] Found dplayerx.dll at 0x%X\n", stringVirtualAddress);
   uint32_t stringOffset = stringVirtualAddress - info_reloc.VirtualAddress;
 
   std::vector<uint32_t> txt2_patch1 = Analyzer::FindSectionPattern(info_txt2,
@@ -491,19 +456,19 @@ void DPlayerHijack(PELoader& loader, bool patch)
     return;
   }
   uint32_t patch1_offset = txt2_patch1.at(0) - 0x9;
-  printf("Found hijack offset 1 at 0x%X\n", patch1_offset);
+  printf("[.txt2] Found hijack offset 1 at 0x%X\n", patch1_offset);
   patch1_offset -= info_txt2.VirtualAddress;
 
   std::vector<uint32_t> text_patch2 = Analyzer::FindSectionPattern(info_text,
     "\x83\xC4\x04\xA3\x00\x00\x00\x00\x6A\x01", "xxxx????xx", loader.GetImageBase());
   if (text_patch2.empty())
   {
-    printf("Found dplayerx.dll, but failed to find patch section 2\n");
+    printf("[.text] Found dplayerx.dll, but failed to find patch section 2\n");
     return;
   }
 
   uint32_t patch2_offset = text_patch2.at(0) - 0xF;
-  printf("Found hijack offset 2 at 0x%X\n", patch2_offset);
+  printf("[.text] Found hijack offset 2 at 0x%X\n", patch2_offset);
   patch2_offset -= info_text.VirtualAddress;
 
   std::vector<uint32_t> getmodule_offsets = Analyzer::FindSectionPattern(info_txt2,
@@ -516,7 +481,7 @@ void DPlayerHijack(PELoader& loader, bool patch)
 
   //As suspected even with FF15 we will need a relocation patch
   uint32_t getmodule_offset = getmodule_offsets.at(0) - 0x4;
-  printf("Found GetModuleHandleA offset at 0x%X\n", getmodule_offset);
+  printf("[.txt2] Found GetModuleHandleA offset at 0x%X\n", getmodule_offset);
   uint32_t getmodule_addr = 0;
   getmodule_offset -= info_txt2.VirtualAddress;
   memcpy(&getmodule_addr, &info_txt2.data[getmodule_offset], 4);
@@ -575,9 +540,8 @@ bool ApplyPatches(PELoader& loader, bool magic)
   txt2_drvmgtPatch(loader, true);
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
-  txt2_ReadMZPEHeaderPatch(loader, false);
   //if (!UpdateRelocationTable(loader, nullptr)) return false;
-  DPlayerHijack(loader, true);
+  //DPlayerHijack(loader, true);
   return true;
 }
 
