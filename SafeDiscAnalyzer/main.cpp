@@ -9,6 +9,7 @@
 
 int main(int argc, const char** argv)
 {
+
   if (argc < 2)
   {
     printf("Usage: ./SafeDiscAnalyzer.exe <file> <args>\nArguments:\n");

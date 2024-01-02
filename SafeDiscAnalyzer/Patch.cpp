@@ -429,101 +429,6 @@ void txt2_ApplyInterruptDebugPatch(PELoader& loader,  bool patch)
   memcpy(&info.data[sectionOffset + 2] , &dvalue, 4);
 }
 
-void DPlayerHijack(PELoader& loader, bool patch)
-{
-  printf("Checking for dplayerx.dll...\n");
-  //This allows to use the DPLAYERY.DLL man-in-the middle dll for debugging
-  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RDATA);
-  SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
-  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
-  std::vector<uint32_t> reloc_offsets = Analyzer::FindSectionPattern(info_reloc, 
-    "dplayerx.dll", "xxxxxxxxxxxx", loader.GetImageBase());
-  if (reloc_offsets.size() != 1)
-  {
-    printf(".rdata does not have dplayerx.dll, skipping dplayer hijack\n");
-    return;
-  }
-
-  uint32_t stringVirtualAddress = reloc_offsets.at(0);
-  printf("[.rdata] Found dplayerx.dll at 0x%X\n", stringVirtualAddress);
-  uint32_t stringOffset = stringVirtualAddress - info_reloc.VirtualAddress;
-
-  std::vector<uint32_t> txt2_patch1 = Analyzer::FindSectionPattern(info_txt2,
-    "\x83\xC4\x04\x00\x00\x00\x6A\x67", "xxx???xx", loader.GetImageBase());
-  if (txt2_patch1.empty())
-  {
-    printf("Found dplayerx.dll, but failed to find patch section 1\n");
-    return;
-  }
-  uint32_t patch1_offset = txt2_patch1.at(0) - 0x9;
-  printf("[.txt2] Found hijack offset 1 at 0x%X\n", patch1_offset);
-  patch1_offset -= info_txt2.VirtualAddress;
-
-  std::vector<uint32_t> text_patch2 = Analyzer::FindSectionPattern(info_text,
-    "\x83\xC4\x04\xA3\x00\x00\x00\x00\x6A\x01", "xxxx????xx", loader.GetImageBase());
-  if (text_patch2.empty())
-  {
-    printf("[.text] Found dplayerx.dll, but failed to find patch section 2\n");
-    return;
-  }
-
-  uint32_t patch2_offset = text_patch2.at(0) - 0xF;
-  printf("[.text] Found hijack offset 2 at 0x%X\n", patch2_offset);
-  patch2_offset -= info_text.VirtualAddress;
-
-  std::vector<uint32_t> getmodule_offsets = Analyzer::FindSectionPattern(info_txt2,
-    "\x50\xFF\x15\x00\x00\x00\x00\x89\x45\xF0", "xxx????xxx", loader.GetImageBase());
-  if (getmodule_offsets.empty())
-  {
-    printf("Found dplayerx.dll, but failed to find GetModuleHandleA\n");
-    return;
-  }
-
-  //As suspected even with FF15 we will need a relocation patch
-  uint32_t getmodule_offset = getmodule_offsets.at(0) - 0x4;
-  printf("[.txt2] Found GetModuleHandleA offset at 0x%X\n", getmodule_offset);
-  uint32_t getmodule_addr = 0;
-  getmodule_offset -= info_txt2.VirtualAddress;
-  memcpy(&getmodule_addr, &info_txt2.data[getmodule_offset], 4);
-  printf("GetModuleHandleA: 0x%X\n", getmodule_addr);
-
-
-  memcpy(&info_reloc.data[stringOffset], "dplayery.dll", 12);
-
-  memcpy(&info_txt2.data[patch1_offset],
-    "\x68\x00\x00\x00\x00"  //push dplayery.dll
-    "\xFF\x15\x00\x00\x00\x00"  //call GetModuleHandleA
-    "\x90",             //nop nop
-    12);
-  memcpy(&info_txt2.data[patch1_offset + 1], &stringVirtualAddress, 4);
-  memcpy(&info_txt2.data[patch1_offset + 7], &getmodule_addr, 4);
-
-
-  memcpy(&info_text.data[patch2_offset],
-    "\x68\x00\x00\x00\x00",  //push dplayery.dll
-    5);
-  memcpy(&info_text.data[patch2_offset + 1], &stringVirtualAddress, 4);
-  memcpy(&info_text.data[patch2_offset + 0xA],
-    "\xFF\x15\x00\x00\x00\x00"  //call GetModuleHandleA
-    "\x90\x90",
-    8);
-  memcpy(&info_text.data[patch2_offset + 0xA + 2], &getmodule_addr, 4);
-
-  printf("Rename your patched DPLAYERX.DLL to DPLAYERY.DLL\n");
-
-}
-
-/*
-struct RelocationData {
-  uint32_t size;
-  uint32_t offset;
-  uint32_t end_offset;
-  uint32_t entry;
-};
-*/
-
-
-
 
 bool ApplyPatches(PELoader& loader, bool magic)
 {
@@ -541,7 +446,6 @@ bool ApplyPatches(PELoader& loader, bool magic)
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
   //if (!UpdateRelocationTable(loader, nullptr)) return false;
-  //DPlayerHijack(loader, true);
   return true;
 }
 

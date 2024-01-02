@@ -25,6 +25,10 @@ struct SectionInfo {
   BOOL initialized = FALSE;
   const SectionType duplicate;
   int index = -1;
+  bool operator<(SectionInfo& o)
+  {
+    return VirtualAddressCopy > o.VirtualAddressCopy;
+  }
 };
 
 struct RelocationData {

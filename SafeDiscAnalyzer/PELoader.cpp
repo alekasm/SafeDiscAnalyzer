@@ -118,127 +118,148 @@ DWORD PELoader::WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT)
   return ntDuplicatePtr;
 }
 
-
+#include <algorithm>
 bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
 {
   SectionInfo& info_reloc = sectionMap.at(SectionType::RELO2);
-  SectionInfo& info_text = sectionMap.at(SectionType::TEXT);
-  uint32_t VirtualSize = info_text.header.Misc.VirtualSize;
-  uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - GetImageBase();
-  uint32_t VirtualAddressScan = info_text.VirtualAddress - GetImageBase();
-  uint32_t table_offset = 0;
-  uint32_t table_offset_iter = 0;
-  bool found_entry = false;
 
-  while (table_offset_iter < info_reloc.header.SizeOfRawData)
+  SectionInfo& info_text_ = sectionMap.at(SectionType::TEXT);
+  SectionInfo& info_txt2 = sectionMap.at(SectionType::TXT2);
+  std::vector<SectionInfo*> sinfo = {
+    &info_text_,
+    &info_txt2 
+  };
+  //std::sort(sinfo.begin(), sinfo.end());
+
+  for (SectionInfo* info_copy : sinfo)
   {
-    uint32_t VirtualAddress = 0;
-    uint32_t EntrySize = 0;
-    memcpy(&VirtualAddress, &info_reloc.data[table_offset_iter], 4);
-    memcpy(&EntrySize, &info_reloc.data[table_offset_iter + 4], 4);
 
-    if (VirtualAddress == VirtualAddressScan)
+    uint32_t VirtualSize = info_copy->header.Misc.VirtualSize;
+    uint32_t VirtualAddressCopy = info_copy->VirtualAddressCopy - GetImageBase();
+    uint32_t VirtualAddressScan = info_copy->VirtualAddress - GetImageBase();
+    uint32_t table_offset = 0;
+    uint32_t table_offset_iter = 0;
+    bool found_entry = false;
+
+    while (table_offset_iter < info_reloc.header.SizeOfRawData)
     {
-      table_offset = table_offset_iter;
-      printf("Found original .text relocation at 0x%X\n",
-        table_offset + info_reloc.header.PointerToRawData);
-      found_entry = true;
-      break;
+      uint32_t VirtualAddress = 0;
+      uint32_t EntrySize = 0;
+      memcpy(&VirtualAddress, &info_reloc.data[table_offset_iter], 4);
+      memcpy(&EntrySize, &info_reloc.data[table_offset_iter + 4], 4);
+
+      if (VirtualAddress == VirtualAddressScan)
+      {
+        table_offset = table_offset_iter;
+        printf("Found original %s relocation at 0x%X\n",
+          info_copy->name,
+          table_offset + info_reloc.header.PointerToRawData);
+        found_entry = true;
+        break;
+      }
+      table_offset_iter += EntrySize;
     }
-    table_offset_iter += EntrySize;
-  }
 
-  if (!found_entry)
-  {
-    printf("Failed to find relocation entry for .text starting at 0x%X\n", VirtualAddressScan);
-    return false;
-  }
+    if (!found_entry)
+    {
+      printf("Failed to find relocation entry for %s starting at 0x%X\n",
+        info_copy->name, VirtualAddressScan);
+      return false;
+    }
 
-  const uint32_t OldTableSize = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
-  uint32_t next_table_offset = OldTableSize;
-  PBYTE extended_copy = new BYTE[info_reloc.header.SizeOfRawData * 2];
-  memset(extended_copy, 0, info_reloc.header.SizeOfRawData);
-  memcpy(extended_copy, info_reloc.data, OldTableSize);
+    const uint32_t OldTableSize = OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+    uint32_t next_table_offset = OldTableSize;
+    //const uint32_t ExtendedCopySize = info_reloc.header.SizeOfRawData * 4;
+    const uint32_t ExtendedCopySize = 0x4000;
+    PBYTE extended_copy = new BYTE[ExtendedCopySize];
+    memset(extended_copy, 0, ExtendedCopySize);
+    memcpy(extended_copy, info_reloc.data, OldTableSize);
 
-  printf("Start of duplicate table at 0x%X\n",
-    next_table_offset + info_reloc.header.PointerToRawData);
-  memset(&info_reloc.data[next_table_offset], 0, info_reloc.header.SizeOfRawData - next_table_offset);
-
-  int32_t vsize = VirtualSize;
-  uint32_t entry_va = 0;
-  uint32_t entry_size = 0;
-  uint32_t size_added = 0;
-  unsigned int va_override = VirtualAddressCopy;
-  uint32_t total_offset = 0;
-  uint32_t last_va = 0;
-  while (vsize > 0)
-  {
-    memcpy(&entry_va, &info_reloc.data[table_offset], 4);
-    memcpy(&entry_size, &info_reloc.data[table_offset + 4], 4);
-    uint32_t data_size = 0;
-
-    //relocation tables can skip over pages
-    if (last_va > 0)
-      data_size = entry_va - last_va;
-    last_va = entry_va;
-    va_override += data_size;
-
-    memcpy(&extended_copy[next_table_offset], &info_reloc.data[table_offset], entry_size);
-    memcpy(&extended_copy[next_table_offset], &va_override, 4);
-    size_added += entry_size;
-
-    printf("Copying data from 0x%X -> 0x%X\n",
-      table_offset + info_reloc.header.PointerToRawData,
+    printf("Start of duplicate table at 0x%X\n",
       next_table_offset + info_reloc.header.PointerToRawData);
+    //memset(&info_reloc.data[next_table_offset], 0, info_reloc.header.SizeOfRawData - next_table_offset);
 
-    printf("Updating relocation at 0x%X (0x%X): 0x%X -> 0x%X\n",
-      table_offset,
-      table_offset + info_reloc.header.PointerToRawData,
-      entry_va, va_override);
+    int32_t vsize = VirtualSize;
+    uint32_t entry_va = 0;
+    uint32_t entry_size = 0;
+    uint32_t size_added = 0;
+    unsigned int va_override = VirtualAddressCopy;
+    uint32_t total_offset = 0;
+    uint32_t last_va = 0;
+    while (vsize > 0)
+    {
+      memcpy(&entry_va, &info_reloc.data[table_offset], 4);
+      memcpy(&entry_size, &info_reloc.data[table_offset + 4], 4);
+      uint32_t data_size = 0;
 
-    RelocationData data;
-    data.size = entry_size - 8;
-    data.offset = table_offset;
-    data.end_offset = table_offset + entry_size;
-    data.entry = entry_va;
-    textCopyRelocations.push_back(data);
+      //relocation tables can skip over pages
+      if (last_va > 0)
+        data_size = entry_va - last_va;
+      last_va = entry_va;
+      va_override += data_size;
 
-    vsize -= data_size > 0 ? data_size : 0x1000;
-    table_offset += entry_size;
-    next_table_offset += entry_size;
-    total_offset += entry_size;
-  }
+      memcpy(&extended_copy[next_table_offset], &info_reloc.data[table_offset], entry_size);
+      memcpy(&extended_copy[next_table_offset], &va_override, 4);
+      size_added += entry_size;
 
-  uint32_t NewTableSize = OldTableSize + size_added;
-  PBYTE new_table = new BYTE[NewTableSize];
-  memset(new_table, 0, NewTableSize);
-  memcpy(new_table, extended_copy, NewTableSize);
-  delete[] extended_copy;
-  extended_copy = nullptr;
+      printf("Copying data from 0x%X -> 0x%X\n",
+        table_offset + info_reloc.header.PointerToRawData,
+        next_table_offset + info_reloc.header.PointerToRawData);
 
-  delete info_reloc.data;
-  info_reloc.data = new_table;
+      printf("Updating relocation at 0x%X (0x%X): 0x%X -> 0x%X\n",
+        table_offset,
+        table_offset + info_reloc.header.PointerToRawData,
+        entry_va, va_override);
 
-  OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = NewTableSize;
-  printf("Extended .reloc table size from 0x%X -> 0x%X\n", OldTableSize,
-    OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size);
- 
-  if (NewTableSize > info_reloc.header.SizeOfRawData)
-  {
-    DWORD oldSize = info_reloc.header.SizeOfRawData;
-    info_reloc.header.SizeOfRawData = align(NewTableSize, OH->FileAlignment);
-    printf("Increased .reloc SizeOfRawData: 0x%X -> 0x%X\n",
-      oldSize, info_reloc.header.SizeOfRawData);
-    DWORD rawDifference = info_reloc.header.SizeOfRawData - oldSize;
-    OH->SizeOfImage = OH->SizeOfImage + rawDifference;
-  }
+      /*
+      RelocationData data;
+      data.size = entry_size - 8;
+      data.offset = table_offset;
+      data.end_offset = table_offset + entry_size;
+      data.entry = entry_va;
+      //TODO: only use with text relocations... dont care about decryption right now
+      textCopyRelocations.push_back(data);
+      */
 
-  if (NewTableSize > info_reloc.header.Misc.VirtualSize)
-  {
-    DWORD oldSize = info_reloc.header.Misc.VirtualSize;
-    info_reloc.header.Misc.VirtualSize = align(NewTableSize, OH->SectionAlignment);
-    printf("Increased .reloc VirtualSize: 0x%X -> 0x%X\n",
-      oldSize, info_reloc.header.Misc.VirtualSize);
+      vsize -= data_size > 0 ? data_size : 0x1000;
+      table_offset += entry_size;
+      next_table_offset += entry_size;
+      total_offset += entry_size;
+    }
+
+    
+    uint32_t NewTableSize = OldTableSize + size_added;
+    PBYTE new_table = new BYTE[NewTableSize];
+    memset(new_table, 0, NewTableSize);
+    memcpy(new_table, extended_copy, NewTableSize);
+    delete[] extended_copy;
+    extended_copy = nullptr;
+    delete[] info_reloc.data;
+    info_reloc.data = new_table;
+    new_table = nullptr;
+
+    OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size = NewTableSize;
+    printf("Extended .reloc table size from 0x%X -> 0x%X\n", OldTableSize,
+      OH->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size);
+
+    if (NewTableSize > info_reloc.header.SizeOfRawData)
+    {
+      DWORD oldSize = info_reloc.header.SizeOfRawData;
+      info_reloc.header.SizeOfRawData = align(NewTableSize, OH->FileAlignment);
+      printf("Increased .reloc SizeOfRawData: 0x%X -> 0x%X\n",
+        oldSize, info_reloc.header.SizeOfRawData);
+      DWORD rawDifference = info_reloc.header.SizeOfRawData - oldSize;
+      OH->SizeOfImage = OH->SizeOfImage + rawDifference;
+    }
+
+    if (NewTableSize > info_reloc.header.Misc.VirtualSize)
+    {
+      DWORD oldSize = info_reloc.header.Misc.VirtualSize;
+      info_reloc.header.Misc.VirtualSize = align(NewTableSize, OH->SectionAlignment);
+      printf("Increased .reloc VirtualSize: 0x%X -> 0x%X\n",
+        oldSize, info_reloc.header.Misc.VirtualSize);
+    }
+
   }
 
   return true;
