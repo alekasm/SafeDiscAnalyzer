@@ -117,6 +117,69 @@ void text_CanOpenSecdrvPatch(PELoader& loader,  bool patch)
     6);
 }
 
+void txt2_SecdrvVerificationPatch(PELoader& loader, bool patch)
+{
+  //SecdrvVerification is used by the initial decryption from text/txt2, then
+  //again once the txt section is decrypted. This function takes in a message type
+  //which is sent to the driver in arg0. This can be:
+  //3C = GetDebugRegisterInfo
+  //3D = GetIdtInfo
+  //3E = SetupVerification
+
+  //The return results are quite easy and are stored in an ioctl buffer.
+  //GetDebugRegisterInfo returns dr7 which is 0x400
+  //GetIdtInfo returns 0x2C8
+  //SetupVerification returns 0x5278D11B
+
+  //SecdrvVerification(int mtype, int, int, int* return, int);
+  //The two parameters which matter are mtype and the return.
+  //SecdrvVerification should return TRUE.
+  //The out return value is used in various places like the "skew"
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x55\x8B\xEC\x83\xEC\x08\xE8", "xxxxxxx", loader.GetImageBase());
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for SecdrvVerification\n");
+    return;
+  }
+  printf("[.txt2] Found SecdrvVerification at 0x%X, patching: %s\n",offsets.at(0), sbool(patch));
+  if (!patch) return;
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  //Complete re-write of the entire function
+  //This has a similar flavor to SECDRV.SYS ProcessIoctl
+
+  memcpy(&info.data[sectionOffset],
+    "\x55"                            //push ebp
+    "\x8B\xEC"                        //mov ebp, esp
+    "\x83\xEC\x08"                    //sub esp, 0x8
+    "\x51"                            //push ecx
+    "\x52"                            //push edx
+    "\x33\xC0"                        //xor eax, eax
+    "\x8B\x55\x08"                    //mov edx, [ebp+0x8]
+    "\x8B\x4D\x14"                    //mov ecx, [ebp+0x14]
+    "\x83\xEA\x3C"                    //sub edx, 0x3C
+    "\x74\x0E"                        //jz 0xE
+    "\x4A"                            //dec edx
+    "\x74\x13"                        //jz 0x13
+    "\x4A"                            //dec edx
+    "\x74\x18"                        //jz 18
+    "\xC7\x01\x00\x00\x00\x00"        //mov [ecx], 0x0
+    "\xEB\x17"                        //jmp 0x17
+    "\xC7\x01\x00\x04\x00\x00"        //mov [ecx] 0x400
+    "\xEB\x0E"                        //jmp 0x0E
+    "\xC7\x01\xC8\x02\x00\x00"        //mov [ecx], 0x2C8
+    "\xEB\x06"                        //jmp 0x06
+    "\xC7\x01\x1B\xD1\x78\x52"        //mov [ecx], 0x5278D11B
+    "\x40"                            //inc eax
+    "\x5A"                            //pop edx
+    "\x59"                            //pop ecx
+    "\x8B\xE5"                        //mov esp, ebp
+    "\x5D"                            //pop ebp
+    "\xC3",                           //ret
+    64);
+}
+
 void text_SecdrvProcessIoctlPatch(PELoader& loader,  bool patch)
 {
   //This same exact function exists in both the exe wrapper and dplayerx
@@ -433,10 +496,6 @@ void txt2_ApplyInterruptDebugPatch(PELoader& loader,  bool patch)
 bool ApplyPatches(PELoader& loader, bool magic)
 {
   data_StringPatch(loader, true);
-  text_CanOpenSecdrvPatch(loader, !magic);
-  text_SecdrvProcessIoctlPatch(loader, !magic);
-  text_TickCountLowPatch(loader, !magic);
-  text_SecdrvStatusMessagePatch(loader, !magic);
   txt2_AddMagicSkewValuePatch(loader, magic);
   txt2_IsBeingDebuggedPatch(loader, !magic);
   txt2_BeingDebuggedPEBPatch(loader, !magic);
@@ -445,6 +504,16 @@ bool ApplyPatches(PELoader& loader, bool magic)
   txt2_drvmgtPatch(loader, true);
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
+
+  txt2_SecdrvVerificationPatch(loader, true);
+
+  //Pending deletion - replaced by SecdrvVerificationPatch:
+  text_SecdrvStatusMessagePatch(loader, false);
+  text_TickCountLowPatch(loader, false);
+  text_CanOpenSecdrvPatch(loader, false);
+  text_SecdrvProcessIoctlPatch(loader, false);
+
+
   //if (!UpdateRelocationTable(loader, nullptr)) return false;
   return true;
 }
