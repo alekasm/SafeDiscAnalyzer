@@ -1,0 +1,210 @@
+DPLAYERX.DLL Post Decryption:
+First decrypted function gets Kernel32.dll then the function address for VirtualProtect
+
+12F094
+4
+20
+2404866
+VirtualProtect
+
+
+Now lets look at ProcessDLLandICD at: (bp: 24022B1) 0x241665E
+Looks like the function is: 0x2404860 and its modifying the invalid "meat" of the code to be writable
+on first pass we use mode 2 which enters: 24168AD
+
+Okay so they attempt to make a skew based off of .text and not .tex2 because they aren't using IsSectionHeaderFromName
+to verify the section like they do in F18.EXE...
+
+next issue, i need to patch without magic because they have a duplicate MultiCheck* function that gets decrypted and calls
+SecdrvVerification
+
+Back to SecdrvVerification:
+3C = GetDebugRegisterInfo
+3D = GetIdtInfo
+3E = SetupVerification
+
+it indeed does appear that the function 176A6 in F14_set_dump.exe is the same for function 4866 in DPLAYERX_dump.
+See ProcessDLLandICD. Inside of the EXE version it goes:
+
+41ACE2 -> 4112C7 -> 40BF1E (ProcessDLLandICD)
+
+
+UNK_Decryption1 will call NTCheck_PEB_IsDebuggerPresent_Secdrv, but it doesn't care about the skew/output, only if it succeeded
+ProcessInjectedArgs will however verify the skew value
+
+
+---------------------------------
+
+Alright let's recap whats going on. Offset 0x4866 is going to get modified - this is likely going to get decrypted and/or replaced by 0x176A6 from
+the executable. The first decrypted function simple sets write permissions for this code area. After that ProcessDLLandICD(int mode) is called.
+
+On mode = 2, this will perform UNK_Decryption2
+On mode = 1, it will fix/modify function 0x4866
+
+When we are loading the dll (ie DllMain) we use Mode 2. Later in the shellcode which calls the "Ox7FF" function, it uses Mode 1.
+
+*** TODO ***
+UNK_Decryption2 is a wrapper for UNK_Decryption1 which calls FindSection for executable code. Unfortunately it will return .text and not check the section name,
+meaning it's not returning .tex2.
+This will result in an incorrect skew, which means the buffer used in decryption for 0x4866 will fail
+
+oh I see, it gets every executable code section and calculatets the skew... so maybe its fine???
+************
+
+On the first time UNK_Decryption1 is called, it uses Mode 2 - therefore GetIdtInfo is called, and the result is 0x2C8
+The only thing that needs to happen is for the function to return true and for the skew to equal 0x2D8...
+Inside of NTCheck_PEB_IsDebuggerPresent_Secdrv2 we take the skew and add 0x10
+
+So that means on return code 0x2C8 will take a different return path than the 0x400 path - which will call Fix_4866H on a different iteration
+
+2428DB8 = UnknownArray_Decryption1 - this gets populated and iterates in 0x8 increments, 0x14 times
+
+the 0x8 struct is:
+struct{
+int vaddress;
+int calculated_skew;
+}
+
+
+for instance:
+struct {
+ int vaddress = 0x1000;
+ int calculated_skew = 0x59CA2E19;
+}
+
+struct {
+ int vaddress = 0xE000;
+ int calculated_skew = 0x69C7ED38;
+}
+
+0xA0FBF436
+
+yep, gets the skew for each section...
+
+interestingly enough DecryptIoctlMessage(Virtual Adddress 0x4866, 4866 buffer, size 0x20);
+its important to see how the 4866 buffer is generated, which occurs in PrepareDecrypt_4688H in 0x241650B
+
+
+it appears this buffer is written to in two places:
+
+1. ProcessDLLandICD at 2416BE8
+2. PrepareDecrypt_4688H at 241650B
+
+Aha so its actually a couple of different ways its populating what i initially called lpBuffer_4866H.
+it still does take in that buffer but its also used to decrypt elsewhere
+
+okay so we decrypt a couple of functions, no big deal.
+
+------------------------------------------------------------------
+
+Alright now lets use this knowledge and put everything together. 
+
+We're going to start at ProcessDLLandICD.
+
+
+First pass we notice that bFinishedFixing4866 = false as expected, so we branch to 24166F3
+Again, first pass uses ProcessDLLandICD(2) so we take the branch which leads to 24168AD
+
+We call UNK_Decryption2(DPLAYERX_InfoStruct, skew) which leads immediately to the meat and potatoes:
+
+Alright so DllMain just sets a couple of variables more-or-less, the skew values
+looks like we need to fix up the full hash problem - maybe in the shellcode?
+
+-----------------------------
+ProcessDllandICD(int mode = 2)
+{
+	int skew;
+	int skew_2;
+	if(UNK_Decryption2(InfoStruct, &skew))
+	{
+		skew_2_mod = skew % 0x20;
+		int offset = skew / 0x20;
+		if((skew_2 + 4) > 0x20)
+		{
+			offset = skew_2_mod - 4;
+		}
+		DecryptBuffer_4866H(offset, &skew, 4);
+		GlobalSkew += skew;
+		if(mode > 0)
+		{
+			UnknownFunction1(DPLAYERX_InfoStruct, NextSkewVal2*);
+			NextSkewVal3_IDATA = NextSkewVal2;
+		}
+	}
+}
+
+UnknownFunction1:
+reads import table
+puts it into a buffer
+generates some key and put into NextSkewVal
+
+DecryptBuffer_4866(offset, buffer*, int size)
+{
+	int addr = DPLAYERX_InfoStruct.dwEntry + 0x4866;
+	addr += offset; //assuming offset should be zero
+	DecryptIoctlMessage(addr, buffer, 4);
+}
+
+
+
+-------------------------------------
+
+UNK_Decryption1(Info, skew, 1);
+std::vector<SectionInfo> sections = FindSections(SectionType::EXECUTABLE);
+for(Section section : sections)
+{
+	int hash;
+	int skew;
+	int full_hash = 0;
+	if(!CreateNextDecryptionSkewFromText(section, hash))
+		return false;
+
+	MultiCheck_PEB_IsDebuggerPresent_Secdrv2(skew); //driver returns 0x2D8
+
+	if(skew != 0x2D8) //Possibly to screw with the data
+		return PrepareDecrypt_4688H();
+
+	full_hash = full_hash + hash;
+	PopulateDecryptionBuffer(section.VirtualAddress, hash);
+	
+}
+if(skew != 0)
+{
+	*skew = full_hash;
+	return true;
+}
+
+-------------------------------------
+
+struct HashValue {
+	int vaddress;
+	int hash;
+};
+
+
+PopulateDecryptionBuffer(int virtualAddress, int hash)
+{
+	int index = 0;
+	bool bUpdatedSkewArray = false;
+	for(; index < 0x14; index++)
+	{
+		if(HashTable[index].vaddress == 0)
+		{
+			HashTable[index].vaddress = virtualAddress;
+			HashTable[index].hash = hash;
+			bUpdatedSkewArray = true;
+			break;
+		}
+	}
+
+	if(bUpdatedSkewArray)
+		return true;
+}
+
+results:
+0x1000 = 0xC1AAC903
+0xE000 = 0xDD8076A7
+0x18000 = 0x0E45A45A
+0x2E000 = 0xA0FBF436
+0x3B000 = 0x7F0F572C
+
