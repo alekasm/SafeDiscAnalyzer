@@ -402,6 +402,7 @@ bool PELoader::LoadPEFile(const char* filepath)
   //16 section headers without having to move the actual sections - a problem with adding sections
   //on ELFs.
 
+
   printf("Total sections: %d\n", FH->NumberOfSections);
   for (WORD i = 0; i < FH->NumberOfSections; ++i)
   {
@@ -436,6 +437,15 @@ bool PELoader::LoadPEFile(const char* filepath)
       SH[NewIndex].SizeOfRawData = SH[i].SizeOfRawData;
       SH[NewIndex].Characteristics = SH[i].Characteristics;
       SH[NewIndex].PointerToRawData = align(EndOfFile, OH->FileAlignment);
+      
+      //Makes sections not findable in ReadPETableForSection with SectionType = 1
+      //We use this on executable code that gets duplicated, so it only finds the new one
+      const DWORD FindSectionCharacteristics = IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE;
+      if (SH[i].Characteristics & IMAGE_SCN_CNT_CODE)
+      {
+        SH[i].Characteristics ^= IMAGE_SCN_CNT_CODE;
+        printf("Updated %s Characteristics = 0x%X\n", SH[i].Name, SH[i].Characteristics);
+      }
 
       OH->SizeOfImage = SH[NewIndex].VirtualAddress + SH[NewIndex].Misc.VirtualSize;
       FH->NumberOfSections++;
