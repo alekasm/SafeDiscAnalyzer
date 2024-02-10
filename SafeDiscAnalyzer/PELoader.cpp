@@ -383,9 +383,11 @@ bool PELoader::LoadPEFile(const char* filepath)
   printf("Base Relocation Table: 0x%X (size=0x%X)\n",
     BaseRelocationTable.VirtualAddress,
     BaseRelocationTable.Size);
+  //the address resolution
   printf("Import Address Table: 0x%X (size=0x%X)\n",
     ImportAddressTable.VirtualAddress,
     ImportAddressTable.Size);
+  //the entry list for the dlls
   printf("Import Table: 0x%X (size=0x%X)\n",
     ImportTable.VirtualAddress,
     ImportTable.Size);
