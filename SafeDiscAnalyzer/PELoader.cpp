@@ -133,7 +133,7 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
 
   for (SectionInfo* info_copy : sinfo)
   {
-
+    bool is_text_section = std::string(".text").compare(info_copy->name) == 0;
     uint32_t VirtualSize = info_copy->header.Misc.VirtualSize;
     uint32_t VirtualAddressCopy = info_copy->VirtualAddressCopy - GetImageBase();
     uint32_t VirtualAddressScan = info_copy->VirtualAddress - GetImageBase();
@@ -211,14 +211,18 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
         table_offset + info_reloc.header.PointerToRawData,
         entry_va, va_override);
 
-      /*
-      RelocationData data;
-      data.size = entry_size - 8;
-      data.offset = table_offset;
-      data.end_offset = table_offset + entry_size;
-      data.entry = entry_va;
+      
       //TODO: only use with text relocations... dont care about decryption right now
-      textCopyRelocations.push_back(data);
+      /*
+      if (is_text_section)
+      {
+        RelocationData data;
+        data.size = entry_size - 8;
+        data.offset = table_offset;
+        data.end_offset = table_offset + entry_size;
+        data.entry = entry_va;
+        textCopyRelocations.push_back(data);
+      }
       */
 
       vsize -= data_size > 0 ? data_size : 0x1000;
@@ -226,7 +230,6 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
       next_table_offset += entry_size;
       total_offset += entry_size;
     }
-
     
     uint32_t NewTableSize = OldTableSize + size_added;
     PBYTE new_table = new BYTE[NewTableSize];
@@ -261,8 +264,67 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
     }
 
   }
-
   return true;
+}
+
+void PELoader::GenerateTextRelocationData()
+{
+  textCopyRelocations.clear();
+  SectionInfo& info_text = sectionMap.at(SectionType::TEX2);
+  SectionInfo& info_reloc = sectionMap.at(SectionType::RELO2);
+  uint32_t VirtualSize = info_text.header.Misc.VirtualSize;
+  uint32_t VirtualAddressScan = info_text.VirtualAddress - GetImageBase();
+  //uint32_t VirtualAddressCopy = info_text.VirtualAddressCopy - GetImageBase();
+  bool found_entry = false;
+  //uint32_t VirtualAddressCopy = info_copy->VirtualAddressCopy - GetImageBase(); 
+  uint32_t table_offset = 0;
+  uint32_t table_offset_iter = 0;
+  printf("Searching for VA=0x%X starting at table raw offset=0x%X\n", VirtualAddressScan, info_reloc.header.PointerToRawData);
+  while (table_offset_iter < info_reloc.header.SizeOfRawData)
+  {
+    uint32_t VirtualAddress = 0;
+    uint32_t EntrySize = 0;
+    memcpy(&VirtualAddress, &info_reloc.data[table_offset_iter], 4);
+    memcpy(&EntrySize, &info_reloc.data[table_offset_iter + 4], 4);
+    if (VirtualAddress == VirtualAddressScan)
+    {
+      table_offset = table_offset_iter;
+      found_entry = true;
+      break;
+    }
+    table_offset_iter += EntrySize;
+  }
+  printf("Relocation Offset for 0x%X at 0x%X\n", VirtualAddressScan, table_offset);
+  if (!found_entry) return;
+
+
+  int32_t vsize = VirtualSize;
+  uint32_t entry_va = 0;
+  uint32_t entry_size = 0;
+  uint32_t size_added = 0;
+  uint32_t total_offset = 0;
+  uint32_t last_va = 0;
+  while (vsize > 0)
+  {
+    memcpy(&entry_va, &info_reloc.data[table_offset], 4);
+    memcpy(&entry_size, &info_reloc.data[table_offset + 4], 4);
+    uint32_t data_size = 0;
+    //relocation tables can skip over pages
+    if (last_va > 0)
+      data_size = entry_va - last_va;
+    last_va = entry_va;
+
+    RelocationData data;
+    data.size = entry_size - 8;
+    data.offset = table_offset;
+    data.end_offset = table_offset + entry_size;
+    data.entry = entry_va;
+    textCopyRelocations.push_back(data);
+    printf("Decryption RelocationData: Offset:0x%X, Size:0x%04X, Entry: 0x%X\n", data.offset, data.size, data.entry);
+    vsize -= data_size > 0 ? data_size : 0x1000;
+    table_offset += entry_size;
+    total_offset += entry_size;
+  }
 }
 
 DWORD PELoader::ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT)
@@ -522,6 +584,7 @@ bool PELoader::LoadPEFile(const char* filepath)
 
   //WriteDuplicatePEPatch(hFile, NT);
   ExtendRelocationTable(hFile, NT);
+  GenerateTextRelocationData();
   //Update with the new header info
   SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
   WriteFile(hFile, pByte, fileSize, &dw, NULL);

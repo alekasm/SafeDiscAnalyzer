@@ -5,49 +5,19 @@
 #include <unordered_map>
 #include <Ntddscsi.h>
 
-unsigned char SecretHashValues[] = {
-  0x9A, 0x09, 0x58, 0x53, 0x40, 0xF1, 0xF2, 0x93,
-  0x40, 0xF1, 0xF2, 0x93, 0x40, 0xF1, 0xF2, 0x93,
-};
-
-void DecryptString(char* out, char* in)
-{
-  int count = 0;
-  out[count] = in[count];
-
-  loop:
-  char x = in[count];
-  if (x == 0)
-  {
-    out[count] = 0;
-    return;
-  }
-  count++;
-  char i = in[count];
-  i--;
-  char j = out[count - 1];
-  i ^= j;
-  out[count] = i;
-  goto loop;
-
-}
-
 int main(int argc, const char** argv)
 {
-
   if (argc < 2)
   {
     printf("Usage: ./SafeDiscAnalyzer.exe <file> <args>\nArguments:\n");
     printf("-antiasm\tpatches anti-disassembler routines for disassembly\n");
     printf("-bypass\tapplies various patches to crack the game\n");
-    printf("-magic\tuses magic value from kernel driver + decryption\n");
     printf("-decrypt <offset> <size>\tshows decryption of txt at offset\n");
     return 0;
   }
 
   bool antiasm = false;
   bool bypass = false;
-  bool magic = false;
   bool decrypt = false;
   int dOffset = 0;
   int dSize = 0;
@@ -57,8 +27,6 @@ int main(int argc, const char** argv)
       antiasm = true;
     else if (std::string("-bypass").compare(argv[i]) == 0)
       bypass = true;
-    else if (std::string("-magic").compare(argv[i]) == 0)
-      magic = true;
     else if (std::string("-decrypt").compare(argv[i]) == 0)
     { //eg: -decrypt FF0 80
       if (i + 3 > argc)
@@ -75,7 +43,7 @@ int main(int argc, const char** argv)
 
   if (antiasm && (bypass || decrypt))
   {
-    printf("Cannot using -antiasm with -bypass or -decrypt\n");
+    printf("Cannot use -antiasm with -bypass or -decrypt\n");
     return 0;
   }
 
@@ -108,7 +76,7 @@ int main(int argc, const char** argv)
   if (bypass)
   {
     printf("Applying bypass patches\n");
-    if (!ApplyPatches(loader, magic))
+    if (!ApplyPatches(loader))
       return 0;
   }
 

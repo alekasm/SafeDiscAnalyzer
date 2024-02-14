@@ -132,12 +132,13 @@
     <ClCompile Include="Patch.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="PELoader.cpp" />
+    <ClCompile Include="Util.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Analyzer.h" />
-    <ClInclude Include="DPLAYERX.h" />
     <ClInclude Include="Patch.h" />
     <ClInclude Include="PELoader.h" />
+    <ClInclude Include="Util.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,6 +1,8 @@
 #include "Patch.h"
+#include "Util.h"
 
-//#define DEBUGGING_ENABLED
+#define DEBUGGING_ENABLED
+#define DEBUG_INTERMEDIATE_RELOCATION_SKEW
 //42A9D8 = ReadProcessMemory
 //42A9F0 = WriteProcessMemory
 //42AA08 = VirtualProtect
@@ -94,28 +96,6 @@ void txt2_drvmgtPatch(PELoader& loader,  bool patch)
   //sub_40F780 drive check needs to return 1 for true
 }
 
-void text_CanOpenSecdrvPatch(PELoader& loader,  bool patch)
-{
-  //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
-  //This really doesn't do much besides take in some message then return a bool.
-
-  //size_t sectionOffset = 0x4147A3 - TEXT_SECTION;
-  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
-    "\x55\x8B\xEC\x51\xE8\x20\x00\x00\x00", "xxxxxxxxx", loader.GetImageBase());
-  if (offsets.size() != 1)
-  {
-    printf("Expected to find one result for CanOpenSecdrv\n");
-    return;
-  }
-  printf("[.text] Found CanOpenSecdrv at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
-  if (!patch) return;
-  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  memcpy(&info.data[sectionOffset],
-    "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
-    "\xC3",                 //ret
-    6);
-}
 
 void txt2_SecdrvVerificationPatch(PELoader& loader, bool patch)
 {
@@ -180,133 +160,6 @@ void txt2_SecdrvVerificationPatch(PELoader& loader, bool patch)
     64);
 }
 
-void text_SecdrvProcessIoctlPatch(PELoader& loader,  bool patch)
-{
-  //This same exact function exists in both the exe wrapper and dplayerx
-  //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
-  //This calls an ioctl with the following buffer (IoctlBuffer):
-  //IoctlBuffer[0] = 1 (4 byte)
-  //IoctlBuffer[4] = 3 (4 byte)
-  //IoctlBuffer[8] = 0 (4 byte)
-  //IoctlBuffer[C] = 3C(4 byte) <- control code, checked in secdrv.sys:ProcessIoctl
-  //IoctlBuffer[10] = tickCount
-  //IoctlBuffer[410] = 0 (4 byte)
-  //IoctlBuffer[514] = status message, outBuffer
-  //IoctlBuffer[520] = kernel time reported
-  //size_t sectionOffset = 0x414818 - TEXT_SECTION;
-  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
-    "\x55\x8B\xEC\x83\xEC\x0C\xE8\xA9\xFF\xFF\xFF", "xxxxxxxxxx", loader.GetImageBase());
-  if (offsets.size() != 1)
-  {
-    printf("Expected to find one result for SecdrvProcessIoctl\n");
-    return;
-  }
-  printf("[.text] Found SecdrvProcessIoctl at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
-  if (!patch) return;
-  //We will use this function as free space to write code that will populate the IoctlBuffer with the expected
-  //values. Luckily there's just a magic number - 0x400. The offset is at the outbuffer section + 410/414 which ends up
-  //being buffer+924/928h
-  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  int IoctlBuffer;
-  memcpy(&IoctlBuffer, &info.data[sectionOffset + 0x2C], 4);
-  memcpy(&info.data[sectionOffset],
-    "\x8B\x0D\x00\x00\x00\x00"   //mov ecx, [IoctlBuffer]
-    "\x81\xC1\x24\x09\x00\x00"   //add ecx, 0x924
-    "\xB8\x00\x04\x00\x00"       //mov eax, 0x400
-    "\x89\x01"                   //mov [ecx], eax
-    "\x89\x41\x04"               //mov [ecx+4], eax
-    "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
-    "\xC3",                 //ret
-    28);
-  memcpy(&info.data[sectionOffset + 2], &IoctlBuffer, 4);
-}
-
-void txt2_AddMagicSkewValuePatch(PELoader& loader,  bool patch)
-{
-  //Just bypass all the various checks and secdrv ioctls by applying the magic number to the decryption skew.
-  //This value is found in secdrv.sys GetDebugRegister (Command=3C) at 0x10F60, register dr7 = 0x400.
-  //When the ioctl buffer is inspected back in program space, it's not really manipulated in the weird looking
-  //decryption function at 0x416B40 (DecryptIoctlMessage). The result from DecryptIoctlMessage is 0x400 - 
-  //then that's added to DecryptionValueWithSkew.
-  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
-    "\x33\xC2\x2B\xC2\x83\xE0\x0F", "xxxxxxx", loader.GetImageBase());
-  if (offsets.size() != 1)
-  {
-    printf("Expected to find one result for AddMagicSkewValue\n");
-    return;
-  }  
-  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  printf("[.text] Found AddMagicSkewValue at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
-  if (!patch) return;
-  size_t start = sectionOffset + 0x13;
-  int DecryptionValueWithSkew;
-  memcpy(&DecryptionValueWithSkew, &info.data[sectionOffset - 0xD], 4);
-  memcpy(&info.data[start],
-    "\x8B\x0D\x00\x00\x00\x00"   //mov ecx, [DecryptionValueWithSkew]
-    "\x81\xC1\x00\x04\x00\x00"   //add ecx, 0x400 - this sets ZF to 0, so we can then use the jnz
-    "\x89\x0D\x00\x00\x00\x00"  //mov [DecryptionValueWithSkew], ecx
-    "\xEB\xE6",                 //jmp 0xffffffe8 -0x18
-    20);
-  memcpy(&info.data[start + 2], &DecryptionValueWithSkew, 4);
-  memcpy(&info.data[start + 14], &DecryptionValueWithSkew, 4);
-}
-
-
-void text_SecdrvStatusMessagePatch(PELoader& loader,  bool patch)
-{
-  //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
-  //This really doesn't do much besides take in some message then return a bool.
-  //The message passed to the ioctl is 0x42EC30
-  //size_t sectionOffset = 0x414760 - TEXT_SECTION;
-  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
-    "\x55\x8B\xEC\x8B\x45\x08\x83\x38\x01", "xxxxxxxxx", loader.GetImageBase());
-  if (offsets.size() != 1)
-  {
-    printf("Expected to find one result for SecdrvStatusMessage\n");
-    return;
-  }
-  printf("[.text] Found SecdrvStatusMessage at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
-  if (!patch) return;
-  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  memcpy(&info.data[sectionOffset],
-    "\xB8\x01\x00\x00\x00"  //mov eax, 0x1
-    "\xC3",                 //ret
-    6);
-}
-
-void text_TickCountLowPatch(PELoader& loader,  bool patch)
-{
-  //First calls CanOpenSecdrv then OpenSecdrv using the handle \\\\.\\Secdrv
-  //This really doesn't do much besides take in some message then return a bool.
-  //The message passed to the ioctl is 0x42EC30
-  
-
-  //This one is kind of clever, they use address 0x7FFE0000 which is always
-  //KUSER_SHARED_DATA even on 64-bit Windows. They retrieve TickCountLow in 
-  //function 0x4148F8. If the elapsed ticks is > 0xA, return 0.
-
-  //You can essentially bypass this by not debugging that function, this patch
-  //is provided to allow others to debug
-  
-  //size_t sectionOffset = 0x4149DB - TEXT_SECTION;
-  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
-    "\x76\x05\x66\x33\xC0", "xxxxx", loader.GetImageBase());
-  if (offsets.size() != 1)
-  {
-    printf("Expected to find one result for TickCountLow\n");
-    return;
-  }
-  printf("[.text] Found TickCountLow at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
-  if (!patch) return;
-  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  memcpy(&info.data[sectionOffset],
-    "\xEB", //jbe -> jmp
-    1);
-}
 
 /*
 ProcessEnvironmentBlock
@@ -493,44 +346,282 @@ void txt2_ApplyInterruptDebugPatch(PELoader& loader,  bool patch)
 }
 
 
-bool ApplyPatches(PELoader& loader, bool magic)
+bool ApplyPatches(PELoader& loader)
 {
   data_StringPatch(loader, true);
-  txt2_AddMagicSkewValuePatch(loader, magic);
-  txt2_IsBeingDebuggedPatch(loader, !magic);
-  txt2_BeingDebuggedPEBPatch(loader, !magic);
-  txt2_CheckKernel32BreakpointPatch(loader, !magic);
+  txt2_IsBeingDebuggedPatch(loader, true);
+  txt2_BeingDebuggedPEBPatch(loader, true);
+  txt2_CheckKernel32BreakpointPatch(loader, true);
   txt2_ApplyInterruptDebugPatch(loader, true);
   txt2_drvmgtPatch(loader, true);
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
-
   txt2_SecdrvVerificationPatch(loader, true);
-
-  //Pending deletion - replaced by SecdrvVerificationPatch:
-  text_SecdrvStatusMessagePatch(loader, false);
-  text_TickCountLowPatch(loader, false);
-  text_CanOpenSecdrvPatch(loader, false);
-  text_SecdrvProcessIoctlPatch(loader, false);
-
 
   //if (!UpdateRelocationTable(loader, nullptr)) return false;
   return true;
+}
+
+
+uint32_t CreateNextDecryptionSkewFromText(PELoader& loader)
+{
+  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
+  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEX2);
+  SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
+  SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
+ 
+
+  std::vector<RelocationData> reloc_data = loader.GetTextCopyRelocations();
+  if (reloc_data.empty())
+  {
+    printf("Failed to decrypt, relocation data is empty\n");
+    return 0;
+  }
+
+  uint32_t NextSkew = 0;
+
+
+  //NextSkew = 0;
+  unsigned int size_data = info_text.header.SizeOfRawData;
+  unsigned int text_index = 0;
+  int reloc_index = 0;
+
+  uint32_t reloc_entry = reloc_data.at(reloc_index).entry;
+  uint32_t reloc_offset = reloc_data.at(reloc_index).offset;
+  uint32_t virtual_address_entry = 0;
+  memcpy(&virtual_address_entry, &info_reloc.data[reloc_offset], 4);
+  if (virtual_address_entry != reloc_entry)
+  {
+    printf("Raw Data Pointer: 0x%X\n", info_reloc.header.PointerToRawData);
+    return 0;
+  }
+
+  uint32_t reloc_table = reloc_offset + 8;
+  unsigned int table_index = reloc_table;
+  unsigned short last_index = 0;
+  unsigned int size_data_iter = size_data;
+  unsigned int text_offset = 0;
+  bool last_index_override = false;
+  bool page_skip = false;
+  if (size_data_iter > 0x1000)
+    size_data_iter = 0x1000;
+
+  //its possible to skip over relocation chunks
+  while (size_data > 0)
+  {
+
+
+    //Function:0x4136A0
+    unsigned short index_entry;
+    memcpy(&index_entry, &info_reloc.data[table_index], 2);
+    unsigned short index_upper = index_entry >> 0xC;
+    unsigned short next_index = index_entry & 0xFFF;
+    unsigned int current_index = 0;
+    unsigned int true_last_index = last_index;
+    switch (index_upper)
+    {
+    case 1:
+    case 2:
+      current_index = last_index + 2;
+      break;
+    case 3:
+    case 4:
+    case 5:
+      current_index = last_index + 4;
+      break;
+    default:
+      current_index = last_index + 0;
+    }
+    unsigned int size_count = next_index;
+    unsigned int text_index = 0;
+    if (current_index == last_index)
+      current_index += 4;
+    if (last_index > 0 || last_index_override)
+    {
+      size_count = size_count - current_index;
+      text_index = current_index;
+      last_index_override = false;
+    }
+    else
+    {
+      text_index = 0;
+    }
+    text_index += text_offset;
+
+    if (next_index == 0)
+    {
+      if (size_data - size_data_iter > 0)
+      { //table switch condition
+        uint32_t switch_current_index = last_index + 4;
+        text_index += switch_current_index - current_index;
+        current_index = switch_current_index;
+      }
+      size_count = ((size_data_iter - 1) - current_index) + 1;
+    }
+
+    if (page_skip)
+    {
+      page_skip = false;
+      current_index = 0;
+      size_count = 0x1000;
+      next_index = 0;
+      index_upper = 0;
+      last_index = -1;
+    }
+
+#ifdef DEBUGGING_ENABLED
+    printf("[0x%X] entry<0x%X,0x%X> Decrypting 0x%X with size of 0x%X, ending: 0x%X, last=0x%X, current = 0x%X\n",
+      table_index + info_reloc.header.PointerToRawData,
+      next_index, index_upper,
+      current_index, size_count, next_index,
+      last_index, current_index);
+    fflush(stdout);
+#endif
+
+    if (last_index == 0 && next_index == 0)
+    {
+#ifdef DEBUGGING_ENABLED
+      printf("Skipped - likely starting new page on zero offset\n");
+      fflush(stdout);
+#endif
+      current_index = 0;
+      table_index = table_index + 2;
+      last_index_override = true;
+      continue;
+    }
+    last_index = next_index;
+
+    //bool last_decrypt = false;
+    if (next_index == 0)
+    {
+      if (size_data - size_data_iter > 0)
+      {
+        uint32_t old_reloc_entry = reloc_entry;
+        ++reloc_index;
+
+        //Verification Part 1
+        if (reloc_index >= reloc_data.size())
+        {
+          printf("Relocation data only has %ld entries, attempting to grab entry %ld\n",
+            reloc_index, reloc_data.size());
+          return 0;
+        }
+
+        //Verification Part 2
+        reloc_entry = reloc_data.at(reloc_index).entry;
+        reloc_offset = reloc_data.at(reloc_index).offset;
+        virtual_address_entry = 0;
+        memcpy(&virtual_address_entry, &info_reloc.data[reloc_offset], 4);
+        fflush(stdout);
+        if (virtual_address_entry != reloc_entry)
+        {
+          printf("RelocationData Entry: 0x%X, RelocationTable Entry: 0x%X\n",
+            reloc_entry, virtual_address_entry);
+          printf("Raw Data Pointer: 0x%X\n", info_reloc.header.PointerToRawData);
+          fflush(stdout);
+          return 0;
+        }
+        uint32_t size_difference = (reloc_entry - old_reloc_entry);
+        
+        if (size_difference > 0x1000)
+        { //page skip still gets processed
+          reloc_entry = old_reloc_entry + 0x1000;
+          --reloc_index;
+          reloc_offset = reloc_data.at(reloc_index).offset;
+          page_skip = true;
+        }
+        size_data -= (reloc_entry - old_reloc_entry);
+
+        reloc_table = reloc_offset + 8;
+        #ifdef DEBUG_INTERMEDIATE_RELOCATION_SKEW
+        printf("[%d] Switching to new table: 0x%X (File Offset=0x%X), Size Remaining: 0x%X\n",
+          reloc_index, reloc_entry, reloc_offset + info_reloc.header.PointerToRawData, size_data);
+        fflush(stdout);
+        #endif
+      }
+      else
+      {
+        //last_decrypt = true;
+        size_data = 0;
+      }
+
+
+      table_index = reloc_table;
+      last_index = 0;
+      unsigned int old_iter = size_data_iter;
+      if (size_data > 0x1000)
+        size_data_iter = 0x1000;
+      else
+        size_data_iter = size_data;
+
+
+#ifdef DEBUGGING_ENABLED
+      printf("size remaining: 0x%X, iter: 0x%X\n", size_data, size_data_iter);
+      fflush(stdout);
+#endif
+      text_offset += old_iter;
+    }
+    else
+    {
+      table_index = table_index + 2;
+    }
+
+    if (size_count == 0)
+    {
+#ifdef DEBUGGING_ENABLED
+      printf("Size is zero - skipping\n");
+      fflush(stdout);
+#endif
+      continue;
+    }
+
+    unsigned int starting_val = 0xFD379AB1;
+    for (unsigned int j = size_count; j > 0; j--)
+    {
+      unsigned int v1 = info_text.data[text_index++] & 0xFF;
+      v1 = v1 * starting_val;
+      NextSkew += v1;
+      unsigned int v2 = starting_val * 0xA7753394;
+      starting_val = v2 + (j - 1) + 0x3BC62BB2;
+    }
+
+#ifdef DEBUG_INTERMEDIATE_RELOCATION_SKEW
+    printf("Next Skew: 0x%X\n", NextSkew);
+    fflush(stdout);
+#endif
+  }
+
+#ifdef DEBUG_INTERMEDIATE_RELOCATION_SKEW
+  printf("Final decryption skew: 0x%X\n", NextSkew);
+  fflush(stdout);
+#endif
+  return NextSkew;
 }
 
 //TODO: relocation patching now works, but we need to re-adjust 
 //But the returned decryption does not with the table skips
 void Decrypt(PELoader& loader, int showOffset, int showSize)
 {
-  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELOC);
-  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEXT);
+  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
+  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEX2);
   SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
   SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
 
+  if (showOffset + showSize > info_txt.header.Misc.VirtualSize)
+  {
+    unsigned long vaddr = loader.GetImageBase() + info_txt.header.VirtualAddress;
+    printf("Decryption 0x%08X - 0x%08X is outside of .txt section 0x%08X - 0x%08X\n",
+      vaddr + showOffset, vaddr + showOffset + showSize,
+      vaddr, vaddr + info_txt.header.Misc.VirtualSize);
+    return;
+  }
+
   std::vector<RelocationData> reloc_data = loader.GetTextCopyRelocations();
- 
-  //if(!UpdateRelocationTable(loader, nullptr, &reloc_data))
-  //  return;
+  if (reloc_data.empty())
+  {
+    printf("Failed to decrypt, relocation data is empty\n");
+    return;
+  } 
 
   //txt section is the encrypted data that needs to be decrypted.
   //First pass prepares the encrypted txt section, xor with a rolling key - 8 bytes
@@ -553,7 +644,7 @@ void Decrypt(PELoader& loader, int showOffset, int showSize)
   unsigned int decryption_key = DECRYPTION_VALUE_START;
 
   int index = 0;
-  unsigned int NextSkew = 0;
+  unsigned int NextSkew = CreateNextDecryptionSkewFromText(loader);
   unsigned int size = info_txt.header.SizeOfRawData;
   char* decrypt_buffer = new char[size];
   memset(decrypt_buffer, 0, size);
@@ -602,150 +693,15 @@ iter_firstpass:
     decrypt_buffer[i] ^= info_txt2.data[i];
     decryption_skew += decrypt_buffer[i] & 0xFF;
 #ifdef DEBUGGING_ENABLED
-    printf("Decryption Skew: 0x%X\n", decryption_skew);
+    //printf("Decryption Skew: 0x%X\n", decryption_skew);
 #endif
     if ((i + 1) % 0x10 == 0) //421DB9
       decryption_skew += 0x400; //dr7 result from secdrv driver
     if ((i + 1) % 0x1000 == 0)
     {
-      NextSkew = 0;
-      int size_data = info_text.header.SizeOfRawData;
-      unsigned int text_index = 0;
-      int reloc_index = 0;
-      uint32_t reloc_table = reloc_data.at(reloc_index).offset + 8;
-      unsigned int table_index = reloc_table;
-      unsigned short last_index = 0;
-      unsigned int size_data_iter = size_data;
-      unsigned int text_offset = 0;
-      bool last_index_override = false;
-      if (size_data_iter > 0x1000)
-        size_data_iter = 0x1000;
-      while (size_data > 0)
-      {
-        //Function:0x4136A0
-        unsigned short index_entry;
-        memcpy(&index_entry, &info_reloc.data[table_index], 2);
-        unsigned short index_upper = index_entry >> 0xC;
-        unsigned short next_index = index_entry & 0xFFF;
-        unsigned int current_index = 0;
-        switch (index_upper)
-        {
-        case 1:
-        case 2:
-          current_index = last_index + 2;
-          break;
-        case 3:
-        case 4:
-        case 5:
-          current_index = last_index + 4;
-          break;
-        default:
-          current_index = last_index + 0;
-        }
-        unsigned int size_count = next_index;
-        unsigned int text_index = 0;
-        if (current_index == last_index)
-          current_index += 4;
-        if (last_index > 0 || last_index_override)
-        {
-          size_count = size_count - current_index;
-          text_index = current_index;
-          last_index_override = false;
-        }
-        else
-        {
-          text_index = 0;
-        }
-        text_index += text_offset;
-
-        if (next_index == 0)
-        {
-            size_count = ((size_data_iter - 1) - current_index) + 1;
-        }
-
-#ifdef DEBUGGING_ENABLED
-        printf("[0x%X] entry<0x%X,0x%X> Decrypting 0x%X with size of 0x%X, ending: 0x%X, last=0x%X, current = 0x%X\n",
-          table_index + info_reloc.header.PointerToRawData,
-          next_index, index_upper,
-          current_index, size_count, next_index,
-          last_index, current_index);
-        fflush(stdout);
-#endif
-
-        if (last_index == 0 && next_index == 0)
-        {
-#ifdef DEBUGGING_ENABLED
-          printf("Skipped - likely starting new page on zero offset\n");
-          fflush(stdout);
-#endif
-          current_index = 0;
-          table_index = table_index + 2;
-          last_index_override = true;
-          continue;
-        }
-        last_index = next_index;
-
-        if(next_index == 0)
-        {
-          if (size_data - size_data_iter > 0)
-          {
-            reloc_table = reloc_data.at(++reloc_index).offset + 8;
-#ifdef DEBUGGING_ENABLED
-            printf("Switching to new table (%d): 0x%X\n", reloc_index, reloc_data.at(reloc_index).entry);
-            fflush(stdout);
-#endif
-          }
-
-          table_index = reloc_table;
-          last_index = 0;
-          size_data -= size_data_iter;
-          unsigned int old_iter = size_data_iter;
-          if (size_data > 0x1000)
-            size_data_iter = 0x1000;
-          else
-            size_data_iter = size_data;
-#ifdef DEBUGGING_ENABLED
-          printf("size remaining: 0x%X, iter: 0x%X\n", size_data, size_data_iter);
-          fflush(stdout);
-#endif
-          text_offset += old_iter;
-        }
-        else
-        {
-          table_index = table_index + 2;
-        }
-
-        if (size_count == 0)
-        {
-#ifdef DEBUGGING_ENABLED
-          printf("Size is zero - skipping\n");
-          fflush(stdout);
-#endif
-          continue;
-        }
-
-        unsigned int starting_val = 0xFD379AB1;
-        for (unsigned int j = size_count; j > 0; j--)
-        {
-          unsigned int v1 = info_text.data[text_index++] & 0xFF;
-          v1 = v1 * starting_val;
-          NextSkew += v1;
-          unsigned int v2 = starting_val * 0xA7753394;
-          starting_val = v2 + (j - 1) + 0x3BC62BB2;
-        }
-#ifdef DEBUGGING_ENABLED
-        printf("Next Skew: 0x%X\n", NextSkew);
-        fflush(stdout);
-#endif
-      }
-#ifdef DEBUGGING_ENABLED
-      printf("Final decryption skew: 0x%X\n", NextSkew);
-      fflush(stdout);
-#endif
       decryption_skew += NextSkew;
     }
-  }
- 
+  } 
   unsigned long vaddr = loader.GetImageBase() + info_txt.header.VirtualAddress;
   printf("Decryption 0x%08X - 0x%08X:\n", vaddr + showOffset, vaddr + showOffset + showSize);
   for (unsigned int i = showOffset; i < (showOffset + showSize); ++i)

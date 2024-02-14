@@ -4,7 +4,7 @@
 #include <vector>
 #include <unordered_map>
 
-enum SectionType { NONE = 0, TEXT, TXT2, TXT, DATA, RELOC, RELO2, RDATA };
+enum SectionType { NONE = 0, TEXT, TXT2, TXT, DATA, RELOC, RELO2, RDATA, TEX2 };
 
 struct SectionInfo {
   SectionInfo(const char* name, const char* copy, SectionType duplicate = NONE) :
@@ -48,6 +48,7 @@ struct PELoader
   DWORD GetImageBase() { return imageBase; }
   SectionMap& GetSectionMap() { return sectionMap; }
   std::vector<RelocationData> GetTextCopyRelocations() { return textCopyRelocations; }
+  void GenerateTextRelocationData();
 private:
   DWORD WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT);
   DWORD ExtendRelocationTable(HANDLE hFile, PIMAGE_NT_HEADERS NT);
@@ -55,8 +56,8 @@ private:
   const DWORD WIN32_PE_ENTRY = 0x400000;
   DWORD imageBase = WIN32_PE_ENTRY;
   SectionMap sectionMap = {
-    {TEXT, SectionInfo(".text", ".tex2")},
-    {TXT2,  SectionInfo(".txt2", ".txt3")},
+    {TEXT, SectionInfo(".text", ".tex2", TEX2)},
+    {TXT2, SectionInfo(".txt2", ".txt3")},
     {TXT, SectionInfo(".txt")},
     {DATA, SectionInfo(".data")},
     {RDATA, SectionInfo(".rdata")},
