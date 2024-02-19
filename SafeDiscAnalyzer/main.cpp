@@ -19,8 +19,8 @@ int main(int argc, const char** argv)
   bool antiasm = false;
   bool bypass = false;
   bool decrypt = false;
-  int dOffset = 0;
-  int dSize = 0;
+  uint32_t dOffset = 0;
+  uint32_t dSize = 0;
   for (int i = 2; i < argc; ++i)
   {
     if (std::string("-antiasm").compare(argv[i]) == 0)
@@ -34,8 +34,8 @@ int main(int argc, const char** argv)
         printf("-decrypt requires offset and size args\n");
         return 0;
       }
-      dOffset = strtoull(argv[i + 1], NULL, 16);
-      dSize = strtoull(argv[i + 2], NULL, 16);
+      dOffset = strtoul(argv[i + 1], NULL, 16);
+      dSize = strtoul(argv[i + 2], NULL, 16);
       decrypt = true;
       i += 2;
     }

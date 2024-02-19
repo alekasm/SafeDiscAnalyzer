@@ -4,7 +4,7 @@
 #include <vector>
 #include <unordered_map>
 
-enum SectionType { NONE = 0, TEXT, TXT2, TXT, DATA, RELOC, RELO2, RDATA, TEX2 };
+enum SectionType { NONE = 0, TEXT, TXT2, TXT, DATA, RELOC, RELO2, RDATA, TEX2, TXT3 };
 
 struct SectionInfo {
   SectionInfo(const char* name, const char* copy, SectionType duplicate = NONE) :
@@ -57,7 +57,7 @@ private:
   DWORD imageBase = WIN32_PE_ENTRY;
   SectionMap sectionMap = {
     {TEXT, SectionInfo(".text", ".tex2", TEX2)},
-    {TXT2, SectionInfo(".txt2", ".txt3")},
+    {TXT2, SectionInfo(".txt2", ".txt3", TXT3)},
     {TXT, SectionInfo(".txt")},
     {DATA, SectionInfo(".data")},
     {RDATA, SectionInfo(".rdata")},

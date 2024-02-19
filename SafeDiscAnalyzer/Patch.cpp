@@ -1,8 +1,8 @@
 #include "Patch.h"
 #include "Util.h"
 
-#define DEBUGGING_ENABLED
-#define DEBUG_INTERMEDIATE_RELOCATION_SKEW
+//#define DEBUGGING_ENABLED
+//#define DEBUG_INTERMEDIATE_RELOCATION_SKEW
 //42A9D8 = ReadProcessMemory
 //42A9F0 = WriteProcessMemory
 //42AA08 = VirtualProtect
@@ -595,12 +595,14 @@ uint32_t CreateNextDecryptionSkewFromText(PELoader& loader)
   printf("Final decryption skew: 0x%X\n", NextSkew);
   fflush(stdout);
 #endif
+
+  printf("Generated relocation text hash: 0x%X\n", NextSkew);
   return NextSkew;
 }
 
 //TODO: relocation patching now works, but we need to re-adjust 
 //But the returned decryption does not with the table skips
-void Decrypt(PELoader& loader, int showOffset, int showSize)
+void Decrypt(PELoader& loader, uint32_t showOffset, uint32_t showSize)
 {
   SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
   SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEX2);
@@ -643,65 +645,88 @@ void Decrypt(PELoader& loader, int showOffset, int showSize)
 
   unsigned int decryption_key = DECRYPTION_VALUE_START;
 
-  int index = 0;
   unsigned int NextSkew = CreateNextDecryptionSkewFromText(loader);
   unsigned int size = info_txt.header.SizeOfRawData;
   char* decrypt_buffer = new char[size];
   memset(decrypt_buffer, 0, size);
+  printf("Decrypting size of .txt: 0x%lx\n", size);
 
-iter_firstpass:
-  const unsigned int init_val1 = *((int*)&info_txt.data[index + 0]);
-  const unsigned int init_val2 = *((int*)&info_txt.data[index + 4]);
-  unsigned int encrypted_val1 = init_val1;
-  unsigned int encrypted_val2 = init_val2;
-  decryption_key = DECRYPTION_VALUE_START;
 
-  //XORDecryptionOnBuffer - 0x421891
-  for (int i = DECRYPTION_SIZE; i > 0; --i)
+  for (unsigned int index = 0; index < size; index += 8)
   {
-    unsigned int ival1 = (encrypted_val1 << 4) + string_val8;
-    ival1 = ival1 ^ (encrypted_val1 + decryption_key);
-    unsigned int ival2 = (encrypted_val1 >> 5) + string_valC;
-    ival1 = ival1 ^ ival2;
+    const unsigned int init_val1 = *((unsigned int*)&info_txt.data[index + 0]);
+    const unsigned int init_val2 = *((unsigned int*)&info_txt.data[index + 4]);
+    unsigned int encrypted_val1 = init_val1;
+    unsigned int encrypted_val2 = init_val2;
+    decryption_key = DECRYPTION_VALUE_START;
 
-    encrypted_val2 = encrypted_val2 - ival1;
+    //XORDecryptionOnBuffer - 0x421891
+    for (int i = DECRYPTION_SIZE; i > 0; --i)
+    {
+      unsigned int ival1 = (encrypted_val1 << 4) + string_val8;
+      ival1 = ival1 ^ (encrypted_val1 + decryption_key);
+      unsigned int ival2 = (encrypted_val1 >> 5) + string_valC;
+      ival1 = ival1 ^ ival2;
 
-    unsigned int jval1 = (encrypted_val2 << 4) + string_val0;
-    jval1 = jval1 ^ (encrypted_val2 + decryption_key);
-    unsigned int jval2 = (encrypted_val2 >> 5) + string_val4;
-    jval1 = jval1 ^ jval2;
+      encrypted_val2 = encrypted_val2 - ival1;
 
-    encrypted_val1 = encrypted_val1 - jval1;
+      unsigned int jval1 = (encrypted_val2 << 4) + string_val0;
+      jval1 = jval1 ^ (encrypted_val2 + decryption_key);
+      unsigned int jval2 = (encrypted_val2 >> 5) + string_val4;
+      jval1 = jval1 ^ jval2;
 
-    decryption_key -= DECRYPTION_VALUE;
+      encrypted_val1 = encrypted_val1 - jval1;
+
+      decryption_key -= DECRYPTION_VALUE;
+    }
+    memcpy(&decrypt_buffer[index + 0], &encrypted_val1, 4);
+    memcpy(&decrypt_buffer[index + 4], &encrypted_val2, 4);
   }
-  memcpy(&decrypt_buffer[index + 0], &encrypted_val1, 4);
-  memcpy(&decrypt_buffer[index + 4], &encrypted_val2, 4);
-
-  index += 8;
-  if (index < size)
-    goto iter_firstpass;
 
   //0x421B38 - DecryptXORSections
   unsigned int decryption_skew = 0;
-  for (int i = 0; i < size; ++i)
+  unsigned int txt_size_remaining = info_txt.header.SizeOfRawData;
+  unsigned int txt2_size_remaining = info_txt2.header.SizeOfRawData;
+  unsigned int size_chunk = 0x1000;
+  unsigned int info_txt2_offset = 0;
+  unsigned int info_txt_offset = 0;
+  bool switched = false;
+  for (unsigned int i = 0; i < size; ++i)
   {
+
+    if ((info_txt2_offset + 1) > info_txt2.header.SizeOfRawData)
+    {
+      info_txt2_offset =  (info_txt2.header.SizeOfRawData - 0x1000);
+    }
+
     decrypt_buffer[i] ^= (decryption_skew >> 0);
     decrypt_buffer[i] ^= (decryption_skew >> 8);
     decrypt_buffer[i] ^= (decryption_skew >> 16);
     decrypt_buffer[i] ^= (decryption_skew >> 24);
-    decrypt_buffer[i] ^= info_txt2.data[i];
+    decrypt_buffer[i] ^= info_txt2.data[info_txt2_offset];
     decryption_skew += decrypt_buffer[i] & 0xFF;
+
 #ifdef DEBUGGING_ENABLED
-    //printf("Decryption Skew: 0x%X\n", decryption_skew);
+    printf("Decryption Skew: 0x%X\n", decryption_skew);
+    
 #endif
+
     if ((i + 1) % 0x10 == 0) //421DB9
       decryption_skew += 0x400; //dr7 result from secdrv driver
+
     if ((i + 1) % 0x1000 == 0)
     {
+    
       decryption_skew += NextSkew;
+      txt_size_remaining -= size_chunk;
+      txt2_size_remaining -= size_chunk;
+      size_chunk = 0x1000 % txt_size_remaining;
+      if (txt_size_remaining < 0x1000)
+        info_txt2_offset = -1;
     }
+    ++info_txt2_offset;
   } 
+
   unsigned long vaddr = loader.GetImageBase() + info_txt.header.VirtualAddress;
   printf("Decryption 0x%08X - 0x%08X:\n", vaddr + showOffset, vaddr + showOffset + showSize);
   for (unsigned int i = showOffset; i < (showOffset + showSize); ++i)

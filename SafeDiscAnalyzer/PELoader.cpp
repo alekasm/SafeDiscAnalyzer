@@ -133,7 +133,6 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
 
   for (SectionInfo* info_copy : sinfo)
   {
-    bool is_text_section = std::string(".text").compare(info_copy->name) == 0;
     uint32_t VirtualSize = info_copy->header.Misc.VirtualSize;
     uint32_t VirtualAddressCopy = info_copy->VirtualAddressCopy - GetImageBase();
     uint32_t VirtualAddressScan = info_copy->VirtualAddress - GetImageBase();
