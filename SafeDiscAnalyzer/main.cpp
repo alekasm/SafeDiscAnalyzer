@@ -1,9 +1,11 @@
 #include "PELoader.h"
+#include "Crypt.h"
 #include "Analyzer.h"
 #include "Patch.h"
 #include <vector>
 #include <unordered_map>
 #include <Ntddscsi.h>
+
 
 int main(int argc, const char** argv)
 {

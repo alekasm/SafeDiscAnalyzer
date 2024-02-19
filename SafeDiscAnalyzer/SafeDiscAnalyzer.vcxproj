@@ -129,6 +129,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Analyzer.cpp" />
+    <ClCompile Include="Crypt.cpp" />
     <ClCompile Include="Patch.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="PELoader.cpp" />
@@ -136,6 +137,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Analyzer.h" />
+    <ClInclude Include="Crypt.h" />
     <ClInclude Include="Patch.h" />
     <ClInclude Include="PELoader.h" />
     <ClInclude Include="Util.h" />
