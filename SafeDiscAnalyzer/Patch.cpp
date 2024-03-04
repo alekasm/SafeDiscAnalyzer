@@ -357,7 +357,5 @@ bool ApplyPatches(PELoader& loader)
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
   txt2_SecdrvVerificationPatch(loader, true);
-
-  //if (!UpdateRelocationTable(loader, nullptr)) return false;
   return true;
 }

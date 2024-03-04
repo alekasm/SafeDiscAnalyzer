@@ -237,10 +237,10 @@ uint32_t CreateNextDecryptionSkewFromText(PELoader& loader)
   return NextSkew;
 }
 
-void Decrypt(PELoader& loader, uint32_t showOffset, uint32_t showSize)
+void Decrypt(PELoader& loader, uint32_t showOffset, uint32_t showSize, bool replace = false)
 {
-  SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
-  SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEX2);
+  //SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
+  //SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEX2);
   SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
   SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
 
@@ -253,12 +253,14 @@ void Decrypt(PELoader& loader, uint32_t showOffset, uint32_t showSize)
     return;
   }
 
+  /*
   std::vector<RelocationData> reloc_data = loader.GetTextCopyRelocations();
   if (reloc_data.empty())
   {
     printf("Failed to decrypt, relocation data is empty\n");
     return;
   }
+  */
 
   //txt section is the encrypted data that needs to be decrypted.
   //First pass prepares the encrypted txt section, xor with a rolling key - 8 bytes
@@ -321,11 +323,8 @@ void Decrypt(PELoader& loader, uint32_t showOffset, uint32_t showSize)
   //0x421B38 - DecryptXORSections
   unsigned int decryption_skew = 0;
   unsigned int txt_size_remaining = info_txt.header.SizeOfRawData;
-  unsigned int txt2_size_remaining = info_txt2.header.SizeOfRawData;
   unsigned int size_chunk = 0x1000;
   unsigned int info_txt2_offset = 0;
-  unsigned int info_txt_offset = 0;
-  bool switched = false;
   for (unsigned int i = 0; i < size; ++i)
   {
 
@@ -354,12 +353,186 @@ void Decrypt(PELoader& loader, uint32_t showOffset, uint32_t showSize)
 
       decryption_skew += NextSkew;
       txt_size_remaining -= size_chunk;
-      txt2_size_remaining -= size_chunk;
       size_chunk = 0x1000 % txt_size_remaining;
       if (txt_size_remaining < 0x1000)
         info_txt2_offset = -1;
     }
     ++info_txt2_offset;
+  }
+  if (replace)
+  {
+    delete[] info_txt.data;
+    info_txt.data = (PBYTE)decrypt_buffer;
+  }
+  unsigned long vaddr = loader.GetImageBase() + info_txt.header.VirtualAddress;
+  printf("Decryption 0x%08X - 0x%08X:\n", vaddr + showOffset, vaddr + showOffset + showSize);
+  for (unsigned int i = showOffset; i < (showOffset + showSize); ++i)
+  {
+    if (i % 0x10 == 0)
+      printf("[%08X] ", vaddr + i);
+    printf("%02X ", decrypt_buffer[i] & 0xFF);
+    if ((i + 1) % 0x10 == 0)
+      printf("\n");
+  }
+  printf("\n");
+  if (!replace)
+  {
+    delete[] decrypt_buffer;
+  }
+}
+
+
+
+#define STRING_VAL0 0x03020100
+#define STRING_VAL4 0x07060504
+#define STRING_VAL8 0x0B0A0908
+#define STRING_VALC 0x0C0D0E0F
+#define DECRYPTION_VALUE2 0x9E3779B9
+#define DECRYPTION_VALUE_START2 DECRYPTION_VALUE2 << 5 
+#define DECRYPTION_SIZE2 0x20
+
+
+
+void decrypt_rotation(unsigned int& encrypted_val1, unsigned int& encrypted_val2, unsigned int& decryption_key)
+{
+  unsigned int ival1 = (encrypted_val1 << 4) + STRING_VAL8;
+  ival1 = ival1 ^ (encrypted_val1 + decryption_key);
+  unsigned int ival2 = (encrypted_val1 >> 5) + STRING_VALC;
+  unsigned int ival3 = ival1 ^ ival2;
+  unsigned int decrypted_val2 = encrypted_val2 - ival3;
+
+
+  unsigned int jval1 = (decrypted_val2 << 4) + STRING_VAL0;
+  jval1 = jval1 ^ (decrypted_val2 + decryption_key);
+  unsigned int jval2 = (decrypted_val2 >> 5) + STRING_VAL4;
+  unsigned int jval3 = jval1 ^ jval2;
+  unsigned int decrypted_val1 = encrypted_val1 - jval3;
+
+  encrypted_val1 = decrypted_val1;
+  encrypted_val2 = decrypted_val2;
+  decryption_key -= DECRYPTION_VALUE2;
+}
+
+void encrypt_rotation(unsigned int& decrypted_val1, unsigned int& decrypted_val2, unsigned int& decryption_key)
+{
+  unsigned int jval1 = (decrypted_val2 << 4) + STRING_VAL0;
+  jval1 = jval1 ^ (decrypted_val2 + decryption_key);
+  unsigned int jval2 = (decrypted_val2 >> 5) + STRING_VAL4;
+  unsigned int jval3 = jval1 ^ jval2;
+  unsigned int encrypted_val1 = decrypted_val1 + jval3;
+
+  unsigned int ival1 = (encrypted_val1 << 4) + STRING_VAL8;
+  ival1 = ival1 ^ (encrypted_val1 + decryption_key);
+  unsigned int ival2 = (encrypted_val1 >> 5) + STRING_VALC;
+  unsigned int ival3 = ival1 ^ ival2;
+  unsigned int encrypted_val2 = decrypted_val2 + ival3;
+
+  decrypted_val1 = encrypted_val1;
+  decrypted_val2 = encrypted_val2;
+  decryption_key += DECRYPTION_VALUE2;
+}
+
+
+void iterate_crypt(unsigned char* buffer, unsigned int size, CryptMode mode)
+{
+  for (unsigned int index = 0; index < size; index += 8)
+  {
+    const int DECRYPTION_VALUE_START = mode == CryptMode::DECRYPT ?
+      DECRYPTION_VALUE_START2 : DECRYPTION_VALUE2;
+    const unsigned int init_val1 = *((unsigned int*)&buffer[index + 0]);
+    const unsigned int init_val2 = *((unsigned int*)&buffer[index + 4]);
+    unsigned int crypted_val1 = init_val1;
+    unsigned int crypted_val2 = init_val2;
+    unsigned int decryption_key = DECRYPTION_VALUE_START;
+
+    for (int i = DECRYPTION_SIZE2; i > 0; --i)
+    {
+      if(mode == CryptMode::DECRYPT)
+        decrypt_rotation(crypted_val1, crypted_val2, decryption_key);
+      else
+        encrypt_rotation(crypted_val1, crypted_val2, decryption_key);
+    }
+    memcpy(&buffer[index + 0], &crypted_val1, 4);
+    memcpy(&buffer[index + 4], &crypted_val2, 4);
+  }
+}
+
+
+void xor_crypt(unsigned char* buffer, unsigned int size, CryptMode mode, PELoader& loader)
+{
+  SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
+  SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
+  unsigned int txt_size_remaining = info_txt.header.SizeOfRawData;
+  unsigned int size_chunk = 0x1000;
+  unsigned int info_txt2_offset = 0;
+  unsigned int NextSkew = CreateNextDecryptionSkewFromText(loader);
+  unsigned int decryption_skew = 0;
+  for (unsigned int i = 0; i < size; ++i)
+  {
+    if ((info_txt2_offset + 1) > info_txt2.header.SizeOfRawData)
+    {
+      info_txt2_offset = (info_txt2.header.SizeOfRawData - 0x1000);
+    }
+
+    uint8_t previous_value = buffer[i];
+    buffer[i] ^= (decryption_skew >> 0);
+    buffer[i] ^= (decryption_skew >> 8);
+    buffer[i] ^= (decryption_skew >> 16);
+    buffer[i] ^= (decryption_skew >> 24);
+    buffer[i] ^= info_txt2.data[info_txt2_offset];
+
+    if(mode == CryptMode::DECRYPT)
+      decryption_skew += buffer[info_txt2_offset] & 0xFF;
+    else
+      decryption_skew += previous_value & 0xFF;
+
+    if ((i + 1) % 0x10 == 0)
+      decryption_skew += 0x400; //dr7 result from secdrv driver
+    if ((i + 1) % 0x1000 == 0)
+    {
+      decryption_skew += NextSkew;
+      txt_size_remaining -= size_chunk;
+      size_chunk = 0x1000 % txt_size_remaining;
+      if (txt_size_remaining < 0x1000)
+        info_txt2_offset = -1;
+    }
+    ++info_txt2_offset;
+  }
+}
+
+const char* s_Decrypt = "Decrypt";
+const char* s_Encrypt = "Encrypt";
+
+
+void CryptTest(PELoader& loader, uint32_t showOffset, uint32_t showSize, CryptMode mode)
+{
+  printf("Crypt Mode: %s\n", mode == ENCRYPT ? s_Encrypt : s_Decrypt);
+  SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
+
+  if (showOffset + showSize > info_txt.header.Misc.VirtualSize)
+  {
+    unsigned long vaddr = loader.GetImageBase() + info_txt.header.VirtualAddress;
+    printf("Decryption 0x%08X - 0x%08X is outside of .txt section 0x%08X - 0x%08X\n",
+      vaddr + showOffset, vaddr + showOffset + showSize,
+      vaddr, vaddr + info_txt.header.Misc.VirtualSize);
+    return;
+  }
+
+  unsigned int size = info_txt.header.SizeOfRawData;
+  unsigned char* decrypt_buffer = new unsigned char[size];
+  memcpy(decrypt_buffer, info_txt.data, size);
+  printf("Crypting size of .txt: 0x%lx\n", size);
+
+
+  if (mode == CryptMode::DECRYPT)
+  {
+    iterate_crypt(decrypt_buffer, size, CryptMode::DECRYPT);
+    xor_crypt(decrypt_buffer, size, CryptMode::DECRYPT, loader);
+  }
+  else
+  {
+    xor_crypt(decrypt_buffer, size, CryptMode::ENCRYPT, loader);
+    iterate_crypt(decrypt_buffer, size, CryptMode::ENCRYPT);
   }
 
   unsigned long vaddr = loader.GetImageBase() + info_txt.header.VirtualAddress;
@@ -373,6 +546,161 @@ void Decrypt(PELoader& loader, uint32_t showOffset, uint32_t showSize)
       printf("\n");
   }
   printf("\n");
+  //memcpy(buffer, decrypt_buffer, size);
   delete[] decrypt_buffer;
 }
 
+
+
+
+void DecryptTest(char* buffer, unsigned int size)
+{
+
+  printf("Before Decrypt:\n");
+  for (unsigned int i = 0; i < size; ++i)
+  {
+    if (i % 0x8 == 0)
+      printf("[%08X] ", i);
+    printf("%02X ", buffer[i] & 0xFF);
+    if ((i + 1) % 0x8 == 0)
+      printf("\n");
+  }
+
+  char* decrypt_buffer = new char[size];
+  memcpy(decrypt_buffer, buffer, size);
+
+
+  const int DECRYPTION_SIZE = 0x20;
+  const int DECRYPTION_VALUE = 0x9E3779B9;
+  const int DECRYPTION_VALUE_START = DECRYPTION_VALUE_START2;
+
+
+  for (unsigned int index = 0; index < size; index += 8)
+  {
+    const unsigned int init_val1 = *((unsigned int*)&decrypt_buffer[index + 0]);
+    const unsigned int init_val2 = *((unsigned int*)&decrypt_buffer[index + 4]);
+    unsigned int encrypted_val1 = init_val1;
+    unsigned int encrypted_val2 = init_val2;
+    unsigned int decryption_key = DECRYPTION_VALUE_START;
+
+    for (int i = DECRYPTION_SIZE; i > 0; --i)
+    {
+      decrypt_rotation(encrypted_val1, encrypted_val2, decryption_key);
+    }
+    memcpy(&decrypt_buffer[index + 0], &encrypted_val1, 4);
+    memcpy(&decrypt_buffer[index + 4], &encrypted_val2, 4);
+  }
+
+  unsigned char truth_data[16] = {
+    0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08
+  };
+
+
+  unsigned int NextSkew = 0x17B28FC9;
+  unsigned int decryption_skew = 0;
+  for (unsigned int i = 0; i < size; ++i)
+  {
+    decrypt_buffer[i] ^= (decryption_skew >> 0);
+    decrypt_buffer[i] ^= (decryption_skew >> 8);
+    decrypt_buffer[i] ^= (decryption_skew >> 16);
+    decrypt_buffer[i] ^= (decryption_skew >> 24);
+    decrypt_buffer[i] ^= truth_data[i];
+    decryption_skew += decrypt_buffer[i] & 0xFF;
+    if ((i + 1) % 0x4 == 0)
+      decryption_skew += 0x400;
+    if ((i + 1) % 0x8 == 0)
+      decryption_skew += NextSkew;
+  }
+
+
+
+  printf("After Decrypt:\n");
+  for (unsigned int i = 0; i < size; ++i)
+  {
+    if (i % 0x8 == 0)
+      printf("[%08X] ", i);
+    printf("%02X ", decrypt_buffer[i] & 0xFF);
+    if ((i + 1) % 0x8 == 0)
+      printf("\n");
+  }
+
+  memcpy(buffer, decrypt_buffer, size);
+  delete[] decrypt_buffer;
+}
+
+
+
+void EncryptTest(char* buffer, unsigned int size)
+{
+
+  printf("Before Encrypt:\n");
+  for (unsigned int i = 0; i < size; ++i)
+  {
+    if (i % 0x8 == 0)
+      printf("[%08X] ", i);
+    printf("%02X ", buffer[i] & 0xFF);
+    if ((i + 1) % 0x8 == 0)
+      printf("\n");
+  }
+
+  char* decrypt_buffer = new char[size];
+  memcpy(decrypt_buffer, buffer, size);
+
+  unsigned char truth_data[16] = {
+  0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11,
+  0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08
+  };
+
+  unsigned int NextSkew = 0x17B28FC9;
+  unsigned int decryption_skew = 0;
+  for (unsigned int i = 0; i < size; ++i)
+  {
+    uint8_t previous_value = decrypt_buffer[i];
+    decrypt_buffer[i] ^= (decryption_skew >> 0);
+    decrypt_buffer[i] ^= (decryption_skew >> 8);
+    decrypt_buffer[i] ^= (decryption_skew >> 16);
+    decrypt_buffer[i] ^= (decryption_skew >> 24);
+    decrypt_buffer[i] ^= truth_data[i];
+    decryption_skew += previous_value & 0xFF;
+
+    if ((i + 1) % 0x4 == 0)
+      decryption_skew += 0x400;
+    if ((i + 1) % 0x8 == 0)
+      decryption_skew += NextSkew;
+  }
+
+  const int DECRYPTION_SIZE = 0x20; //pre-defined rdata:00428010
+  const int DECRYPTION_VALUE = 0x9E3779B9; //pre-defined rdata:0042800C
+  const int DECRYPTION_VALUE_START = DECRYPTION_VALUE;// DECRYPTION_VALUE_START2;// 0;// DECRYPTION_VALUE >> 5; // 0xC6EF3720
+
+  for (unsigned int index = 0; index < size; index += 8)
+  {
+    const unsigned int init_val1 = *((unsigned int*)&decrypt_buffer[index + 0]);
+    const unsigned int init_val2 = *((unsigned int*)&decrypt_buffer[index + 4]);
+    unsigned int decrypted_val1 = init_val1;
+    unsigned int decrypted_val2 = init_val2;
+    unsigned int decryption_key = DECRYPTION_VALUE_START;
+
+    for (int i = DECRYPTION_SIZE; i > 0; --i)
+    {
+      encrypt_rotation(decrypted_val1, decrypted_val2, decryption_key);
+    }
+    memcpy(&decrypt_buffer[index + 0], &decrypted_val1, 4);
+    memcpy(&decrypt_buffer[index + 4], &decrypted_val2, 4);
+
+  }
+
+  printf("After Encrypt:\n");
+  for (unsigned int i = 0; i < size; ++i)
+  {
+    if (i % 0x8 == 0)
+      printf("[%08X] ", i);
+    printf("%02X ", decrypt_buffer[i] & 0xFF);
+    if ((i + 1) % 0x8 == 0)
+      printf("\n");
+  }
+
+  memcpy(buffer, decrypt_buffer, size);
+  delete[] decrypt_buffer;
+}

@@ -9,6 +9,7 @@
 
 int main(int argc, const char** argv)
 {
+
   if (argc < 2)
   {
     printf("Usage: ./SafeDiscAnalyzer.exe <file> <args>\nArguments:\n");
@@ -61,18 +62,27 @@ int main(int argc, const char** argv)
   if (!loader.FoundAllSections())
     return 0;
 
-
-  if (decrypt)
-  {
-    Decrypt(loader, dOffset, dSize);
-    return 0;
-  }
-
   if (antiasm)
   {
     printf("Analyzing sections for anti-disassembler techniques\n");
     Analyzer::PatchSafeDiscAntiDisassembler(loader, SectionType::TXT2);
     Analyzer::PatchSafeDiscAntiDisassembler(loader, SectionType::TEXT);
+    return 0;
+  }
+
+  if (decrypt)
+  {
+    //CryptTest(loader, dOffset, dSize, CryptMode::DECRYPT);
+    char buffer[16] = {
+      0x00, 0x01, 0x02, 0x03, 0x4, 0x5, 0x6, 0x7,
+      0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf
+    };
+    EncryptTest(buffer, sizeof(buffer));
+    DecryptTest(buffer, sizeof(buffer));
+    //CryptTest(loader, buffer_test, sizeof(buffer_test), CryptMode::ENCRYPT);
+    //Decrypt(loader, dOffset, dSize, true);
+    //Encrypt(loader, dOffset, dSize, true);
+    return 0;
   }
 
   if (bypass)
