@@ -301,7 +301,7 @@ void encrypt_rotation(unsigned int& decrypted_val1, unsigned int& decrypted_val2
 }
 
 
-void iterate_crypt(char* buffer, unsigned int size, CryptMode mode)
+void iterate_crypt(PBYTE buffer, unsigned int size, CryptMode mode)
 {
   for (unsigned int index = 0; index < size; index += 8)
   {
@@ -328,9 +328,9 @@ void iterate_crypt(char* buffer, unsigned int size, CryptMode mode)
 }
 
 
-void xor_crypt(char* buffer, unsigned int size, CryptMode mode, PELoader& loader)
+void xor_crypt(PBYTE buffer, unsigned int size, CryptMode mode, PELoader& loader)
 {
-  SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
+  SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT3);
   SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
   unsigned int txt_size_remaining = info_txt.header.SizeOfRawData;
   unsigned int size_chunk = 0x1000;
@@ -381,7 +381,7 @@ void Crypt(PELoader& loader, CryptMode mode)
   SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
 
   unsigned int size = info_txt.header.SizeOfRawData;
-  char* decrypt_buffer = new char[size];
+  PBYTE decrypt_buffer = new BYTE[size];
   memcpy(decrypt_buffer, info_txt.data, size);
   
   if (mode == CryptMode::DECRYPT)
@@ -405,11 +405,13 @@ bool CryptTest(PELoader& loader)
   printf("Performing encryption/decryption test\n");
   SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
   unsigned int size = info_txt.header.SizeOfRawData;
-  char* encrypted = new char[size];
+  PBYTE encrypted = new BYTE[size];
   memcpy(encrypted, info_txt.data, size);
+  //PrintTxtSection(loader, 0x4DB0, 0x30);
   Crypt(loader, CryptMode::DECRYPT);
-  //PrintTxtSection(loader, 0xC6C0, 0x100);
+  //PrintTxtSection(loader, 0x4DB0, 0x30);
   Crypt(loader, CryptMode::ENCRYPT);
+  //PrintTxtSection(loader, 0x4DB0, 0x30);
   bool passed = true;
   for (unsigned int i = 0; i < size; ++i)
   {
@@ -424,7 +426,10 @@ bool CryptTest(PELoader& loader)
     }
   }
   printf("Crypt Test Result: %s\n", passed ? "PASS" : "FAIL");
-  memcpy(info_txt.data, encrypted, size);
+  if (!passed)
+  {
+    memcpy(info_txt.data, encrypted, size);
+  }
   delete[] encrypted;
   return passed;
 }

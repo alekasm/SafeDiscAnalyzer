@@ -16,9 +16,11 @@ int main(int argc, const char** argv)
     printf("-antiasm\tpatches anti-disassembler routines for disassembly\n");
     printf("-bypass\tapplies various patches to crack the game\n");
     printf("-decrypt <offset> <size>\tshows decryption of txt at offset\n");
+    printf("-dll \tspecifies the target is a dll\n");
     return 0;
   }
 
+  bool dll = false;
   bool antiasm = false;
   bool bypass = false;
   bool decrypt = false;
@@ -42,11 +44,15 @@ int main(int argc, const char** argv)
       decrypt = true;
       i += 2;
     }
+    else if (std::string("-dll").compare(argv[i]) == 0)
+    {
+      dll = true;
+    }
   }
 
-  if (antiasm && (bypass || decrypt))
+  if (antiasm && bypass)
   {
-    printf("Cannot use -antiasm with -bypass or -decrypt\n");
+    printf("Cannot use -antiasm with -bypass\n");
     return 0;
   }
 
@@ -70,12 +76,18 @@ int main(int argc, const char** argv)
     return 0;
   }
 
+
+  if (!CryptTest(loader))
+  {
+    printf("Failed crypt test %s\n", dll ? " - dplayerx currently unsupported":"");
+    if (!dll)
+      return 1;
+  }
+
+  Crypt(loader, CryptMode::DECRYPT);
   if (decrypt)
   {
-    CryptTest(loader);
-    Crypt(loader, CryptMode::DECRYPT);
     PrintTxtSection(loader, dOffset, dSize);
-    return 0;
   }
 
   if (bypass)
@@ -84,6 +96,8 @@ int main(int argc, const char** argv)
     if (!ApplyPatches(loader))
       return 0;
   }
+
+  Crypt(loader, CryptMode::ENCRYPT);
 
   bool result = loader.PatchPEFile(argv[1]);
   printf("Patch successful = %s\n", result ? "true" : "false");

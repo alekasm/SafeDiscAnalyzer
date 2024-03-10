@@ -345,6 +345,31 @@ void txt2_ApplyInterruptDebugPatch(PELoader& loader,  bool patch)
   memcpy(&info.data[sectionOffset + 2] , &dvalue, 4);
 }
 
+void txt_GetDriveTypeA(PELoader& loader, bool patch)
+{
+  //Simple patch to bypass GetDriveTypeA = DRIVE_CDROM (5)
+  //size_t sectionOffset = 0x40565A - TXT_SECTION;
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\xFF\x15\x00\x00\x00\x00\x83\xF8\x05\x0F\x85", "xx????xxxxx", loader.GetImageBase());
+  if (offsets.size() != 2)
+  {
+    printf("Expected to find two results for GetDriveTypeA\n");
+    return;
+  }
+
+  //Use the first result, this should be the first call inside of SafeDiscMain
+  printf("[.txt] Found GetDriveTypeA at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  sectionOffset += 9; //set pointer on the jnz
+  memcpy(&info.data[sectionOffset],
+    "\x90\x90\x90\x90\x90\x90",          //nop (6) - don't jump
+    6);
+
+  //sub_40F780 drive check needs to return 1 for true
+}
+
 
 bool ApplyPatches(PELoader& loader)
 {
@@ -357,5 +382,6 @@ bool ApplyPatches(PELoader& loader)
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
   txt2_SecdrvVerificationPatch(loader, true);
+  txt_GetDriveTypeA(loader, true);
   return true;
 }
