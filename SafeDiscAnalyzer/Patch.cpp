@@ -359,17 +359,80 @@ void txt_GetDriveTypeA(PELoader& loader, bool patch)
   }
 
   //Use the first result, this should be the first call inside of SafeDiscMain
+  //inc edi is used later on when passed to IntenseChecking(InfoStruct, char* appName, int passedCDChecks)
   printf("[.txt] Found GetDriveTypeA at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
   sectionOffset += 9; //set pointer on the jnz
   memcpy(&info.data[sectionOffset],
-    "\x90\x90\x90\x90\x90\x90",          //nop (6) - don't jump
+    "\x47\x90\x90\x90\x90\x90",          //inc edi, nop(5)
     6);
 
   //sub_40F780 drive check needs to return 1 for true
 }
 
+void txt_GetCDROMTrackCount(PELoader& loader, bool patch)
+{
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\xC7\x00\x01\x00\x00\x00\xE8", "xxxxxxx", loader.GetImageBase());
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for GetCDROMTrackCount\n");
+    return;
+  }
+
+  printf("[.txt] Found GetCDROMTrackCount at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  sectionOffset += 6; //set pointer on the call RealCDRomCheckTracks (E8)
+  memcpy(&info.data[sectionOffset],
+    "\x90\x90\x90\x90\x90"          //nop (5) - call RealCDRomCheckTracks
+    "\x90\x90\x90",                 //nop (3) - add esp, 0xC
+    8);
+}
+
+void txt_UNK_CDROMCheck1(PELoader& loader, bool patch)
+{
+  //This is part of IntenseChecking
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x83\xC4\x08\x85\xC0\x74\x07\x33\xC0", "xxxxxxxxx", loader.GetImageBase());
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for UNK_CDROMCheck1\n");
+    return;
+  }
+
+  printf("[.txt] Found UNK_CDROMCheck1 at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  sectionOffset += 5; //set pointer on the call RealCDRomCheckTracks (E8)
+  memcpy(&info.data[sectionOffset],
+    "\xEB",          //jnz -> jmp
+    1);
+}
+
+void txt_UNK_CDROMCheck2(PELoader& loader, bool patch)
+{
+  //This is part of IntenseChecking
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x83\xC4\x04\x85\xC0\x74\x07\x33\xC0", "xxxxxxxxx", loader.GetImageBase());
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for UNK_CDROMCheck2\n");
+    return;
+  }
+
+  printf("[.txt] Found UNK_CDROMCheck2 at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  sectionOffset += 5; //set pointer on the call RealCDRomCheckTracks (E8)
+  memcpy(&info.data[sectionOffset],
+    "\xEB",          //jnz -> jmp
+    1);
+}
 
 bool ApplyPatches(PELoader& loader)
 {
@@ -383,5 +446,7 @@ bool ApplyPatches(PELoader& loader)
   txt2_NTQueryProcessInformationPatch(loader, true);
   txt2_SecdrvVerificationPatch(loader, true);
   txt_GetDriveTypeA(loader, true);
+  txt_UNK_CDROMCheck1(loader, true);
+  txt_UNK_CDROMCheck2(loader, true);
   return true;
 }
