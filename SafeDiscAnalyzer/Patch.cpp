@@ -434,6 +434,72 @@ void txt_UNK_CDROMCheck2(PELoader& loader, bool patch)
     1);
 }
 
+
+void txt2_AddPETableSectionLookup(PELoader& loader, bool patch)
+{
+  //This takes an unused SectionType in ReadPETableForSection, and modifies it so we can select
+  //sections easily. The current section types used are:
+  //1 = Executable Section (20000020h)
+  //2 = Data Section
+  //3 = Not Used (.bss)
+  //4 = Not Used (default case, do nothing)  <- reusing this case
+  //5 = Resource Table
+  //6 = Import Table
+  //7 = Export Table
+  //8 = Relocation Table
+  //9 = TLS Table
+  //A = Relocation Data
+  //B = Import Address Table
+
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT2);
+  //This is case 4 (default case, unused)
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\xC7\x02\x00\x00\x00\x00\xC7\x45\x00\x00\x00\x00\x00\xC7\x06\x00\x00\x00\x00", "xxxxxxxxxxxxxxxxxxx", loader.GetImageBase());
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for AddPETableSectionLookup\n");
+    return;
+  }
+  printf("[.txt2] Found AddPETableSectionLookup at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+
+  memcpy(&info.data[sectionOffset],
+    "\x8D\x54\x24\x10"              //lea edx, dword ptr ss:[esp+0x10]
+    "\x52"                          //push edx
+    "\x53"                          //push ebx
+    "\x50"                          //push eax
+    "\x33\xC9"                      //xor ecx, ecx
+    "\x41"                          //inc ecx
+    "\x41"                          //inc ecx
+    "\xC1\xE1\x1C"                  //shl ecx, 0x1C
+    "\x51"                          //push ecx - push 0x20000000
+    "\x51"                          //push ecx - above is a 1-byte optimization
+    "\xE9\xD3\xFE\xFF\xFF",         //jmp - 12D
+    21);
+}
+
+void txt_HashExecutableSectionsType(PELoader& loader, bool patch)
+{
+  //Uses the AddPETableSectionLookup patch to leverage Type 4
+  SectionInfo& info = loader.GetSectionMap().at(SectionType::TXT);
+  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
+    "\x6A\x01\x8B\x4D\x08\x51\xE8", "xxxxxxx", loader.GetImageBase());
+  if (offsets.size() != 1)
+  {
+    printf("Expected to find one result for HashExecutableSectionsType\n");
+    return;
+  }
+
+  printf("[.txt] Found HashExecutableSectionsType at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
+  if (!patch) return;
+  size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
+  memcpy(&info.data[sectionOffset],
+    "\x6A\x04",          //push 4
+    2);
+}
+
+
 bool ApplyPatches(PELoader& loader)
 {
   data_StringPatch(loader, true);
@@ -445,8 +511,12 @@ bool ApplyPatches(PELoader& loader)
   txt2_SoftICEDebuggerCheck(loader, true);
   txt2_NTQueryProcessInformationPatch(loader, true);
   txt2_SecdrvVerificationPatch(loader, true);
+
+  //New Patches
   txt_GetDriveTypeA(loader, true);
   txt_UNK_CDROMCheck1(loader, true);
   txt_UNK_CDROMCheck2(loader, true);
+  txt2_AddPETableSectionLookup(loader, false);
+  txt_HashExecutableSectionsType(loader, false);
   return true;
 }
