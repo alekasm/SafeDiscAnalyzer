@@ -3,3 +3,4 @@
 #include "Analyzer.h"
 
 bool ApplyPatches(PELoader&);
+void CopyDecryptedSections(PELoader&);

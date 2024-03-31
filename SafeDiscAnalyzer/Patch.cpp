@@ -471,8 +471,9 @@ void txt2_AddPETableSectionLookup(PELoader& loader, bool patch)
     "\x50"                          //push eax
     "\x33\xC9"                      //xor ecx, ecx
     "\x41"                          //inc ecx
-    "\x41"                          //inc ecx
-    "\xC1\xE1\x1C"                  //shl ecx, 0x1C
+    "\x90\x90\x90\x90"              //nop (4)
+    //"\x41"                        //inc ecx
+    //"\xC1\xE1\x1C"                //shl ecx, 0x1C
     "\x51"                          //push ecx - push 0x20000000
     "\x51"                          //push ecx - above is a 1-byte optimization
     "\xE9\xD3\xFE\xFF\xFF",         //jmp - 12D
@@ -494,9 +495,16 @@ void txt_HashExecutableSectionsType(PELoader& loader, bool patch)
   printf("[.txt] Found HashExecutableSectionsType at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
   if (!patch) return;
   size_t sectionOffset = offsets.at(0) - info.VirtualAddress;
-  memcpy(&info.data[sectionOffset],
-    "\x6A\x04",          //push 4
-    2);
+  info.data[sectionOffset + 1] = 0x04;
+}
+
+void CopyDecryptedSections(PELoader& loader)
+{
+  //This will not work with the dll
+  SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
+  SectionInfo& info_txx = loader.GetSectionMap().at(SectionType::TXX);
+  unsigned int size = info_txt.header.SizeOfRawData;
+  memcpy(info_txx.data, info_txt.data, size);
 }
 
 
@@ -516,7 +524,7 @@ bool ApplyPatches(PELoader& loader)
   txt_GetDriveTypeA(loader, true);
   txt_UNK_CDROMCheck1(loader, true);
   txt_UNK_CDROMCheck2(loader, true);
-  txt2_AddPETableSectionLookup(loader, false);
-  txt_HashExecutableSectionsType(loader, false);
+  txt2_AddPETableSectionLookup(loader, true);
+  txt_HashExecutableSectionsType(loader, true);
   return true;
 }

@@ -5,11 +5,15 @@
 #include <unordered_map>
 
 enum SectionType { NONE = 0, TEXT, TXT2, TXT, DATA, RELOC, RELO2, RDATA, TEX2, TXT3, TXX };
+enum ExecutableCharacteristics { ORIGINAL_SECTION, DUPLICATE_SECTION };
 
 struct SectionInfo {
   SectionInfo(const char* name, const char* copy, SectionType duplicate = NONE) :
     name(name), copy(copy), duplicate(duplicate)
   {
+    //hardcoded to avoid another constructor arg for this edge case
+    if (duplicate == TXX)
+      characteristics = DUPLICATE_SECTION;
   }
   SectionInfo(const char* name, SectionType duplicate = NONE) :
     name(name), duplicate(duplicate)
@@ -25,6 +29,7 @@ struct SectionInfo {
   BOOL initialized = FALSE;
   const SectionType duplicate;
   int index = -1;
+  ExecutableCharacteristics characteristics = ORIGINAL_SECTION;
   bool operator<(SectionInfo& o)
   {
     return VirtualAddressCopy > o.VirtualAddressCopy;
@@ -58,7 +63,7 @@ private:
   SectionMap sectionMap = {
     {TEXT, SectionInfo(".text", ".tex2", TEX2)},
     {TXT2, SectionInfo(".txt2", ".txt3", TXT3)},
-    {TXT, SectionInfo(".txt" /*, ".txx", TXX */)},
+    {TXT, SectionInfo(".txt" , ".txx", TXX)},
     {DATA, SectionInfo(".data")},
     {RDATA, SectionInfo(".rdata")},
     {RELOC, SectionInfo(".reloc", ".relo2", RELO2)}

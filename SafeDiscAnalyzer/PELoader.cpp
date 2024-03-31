@@ -118,6 +118,33 @@ DWORD PELoader::WriteDuplicatePEPatch(HANDLE hFile, PIMAGE_NT_HEADERS NT)
   return ntDuplicatePtr;
 }
 
+bool ValidateRelocationTable(SectionInfo& info_reloc)
+{
+  uint32_t table_offset_iter = 0;
+  uint32_t last_vaddr = 0;
+  while (table_offset_iter < info_reloc.header.SizeOfRawData)
+  {
+    uint32_t VirtualAddress = 0;
+    uint32_t EntrySize = 0;
+    memcpy(&VirtualAddress, &info_reloc.data[table_offset_iter], 4);
+    memcpy(&EntrySize, &info_reloc.data[table_offset_iter + 4], 4);
+
+    if (last_vaddr > 0)
+    {
+      if (last_vaddr >= VirtualAddress)
+      {
+        printf("Relocation order incorrect: 0x%X -> 0x%X\n",
+          last_vaddr, VirtualAddress);
+        return false;
+      }
+    }
+    last_vaddr = VirtualAddress;
+    table_offset_iter += EntrySize;
+  }
+  printf("Passed relocation table validation test\n");
+  return true;
+}
+
 #include <algorithm>
 bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
 {
@@ -125,9 +152,11 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
 
   SectionInfo& info_text_ = sectionMap.at(SectionType::TEXT);
   SectionInfo& info_txt2 = sectionMap.at(SectionType::TXT2);
+  SectionInfo& info_txt = sectionMap.at(SectionType::TXT);
   std::vector<SectionInfo*> sinfo = {
+    &info_txt,
     &info_text_,
-    &info_txt2 
+    &info_txt2,
   };
   //std::sort(sinfo.begin(), sinfo.end());
 
@@ -261,9 +290,8 @@ bool PELoader::UpdateRelocationTable(PIMAGE_OPTIONAL_HEADER OH)
       printf("Increased .reloc VirtualSize: 0x%X -> 0x%X\n",
         oldSize, info_reloc.header.Misc.VirtualSize);
     }
-
   }
-  return true;
+  return ValidateRelocationTable(info_reloc);
 }
 
 void PELoader::GenerateTextRelocationData()
@@ -503,11 +531,25 @@ bool PELoader::LoadPEFile(const char* filepath)
       
       //Makes sections not findable in ReadPETableForSection with SectionType = 1
       //We use this on executable code that gets duplicated, so it only finds the new one
+      //
       const DWORD FindSectionCharacteristics = IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE;
       if (SH[i].Characteristics & IMAGE_SCN_CNT_CODE)
       {
-        SH[i].Characteristics ^= IMAGE_SCN_CNT_CODE;
-        printf("Updated %s Characteristics = 0x%X\n", SH[i].Name, SH[i].Characteristics);
+        if (it_copy->second.characteristics == ORIGINAL_SECTION)
+        { //Hide original section
+          SH[i].Characteristics ^= IMAGE_SCN_CNT_CODE;
+          //SH[i].Characteristics ^= 0x01;
+          SH[NewIndex].Characteristics |= 0x01; //Reserved IMAGE_SCN_TYPE_DSECT
+          printf("Updated %s Characteristics = 0x%X\n", SH[i].Name, SH[i].Characteristics);
+          printf("Updated %s Characteristics = 0x%X\n", SH[NewIndex].Name, SH[NewIndex].Characteristics);
+        }
+        else
+        {
+          SH[NewIndex].Characteristics ^= IMAGE_SCN_CNT_CODE;
+          SH[NewIndex].Characteristics |= 0x01;
+          printf("Updated %s Characteristics = 0x%X\n", SH[i].Name, SH[i].Characteristics);
+          printf("Updated %s Characteristics = 0x%X\n", SH[NewIndex].Name, SH[NewIndex].Characteristics);
+        }
       }
 
       OH->SizeOfImage = SH[NewIndex].VirtualAddress + SH[NewIndex].Misc.VirtualSize;

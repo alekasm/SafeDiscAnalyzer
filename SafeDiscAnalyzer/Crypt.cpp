@@ -4,9 +4,7 @@ uint32_t CreateNextDecryptionSkewFromText(PELoader& loader)
 {
   SectionInfo& info_reloc = loader.GetSectionMap().at(SectionType::RELO2);
   SectionInfo& info_text = loader.GetSectionMap().at(SectionType::TEX2);
-  SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
   SectionInfo& info_txt2 = loader.GetSectionMap().at(SectionType::TXT2);
-
 
   std::vector<RelocationData> reloc_data = loader.GetTextCopyRelocations();
   if (reloc_data.empty())
@@ -16,9 +14,6 @@ uint32_t CreateNextDecryptionSkewFromText(PELoader& loader)
   }
 
   uint32_t NextSkew = 0;
-
-
-  //NextSkew = 0;
   unsigned int size_data = info_text.header.SizeOfRawData;
   unsigned int text_index = 0;
   int reloc_index = 0;

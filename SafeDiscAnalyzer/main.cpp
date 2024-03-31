@@ -90,6 +90,7 @@ int main(int argc, const char** argv)
     PrintTxtSection(loader, dOffset, dSize);
   }
 
+  CopyDecryptedSections(loader);
   if (bypass)
   {
     printf("Applying bypass patches\n");
