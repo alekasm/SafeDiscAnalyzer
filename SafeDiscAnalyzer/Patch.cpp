@@ -498,32 +498,10 @@ void txt_HashExecutableSectionsType(PELoader& loader, bool patch)
   info.data[sectionOffset + 1] = 0x04;
 }
 
-//im modifying text which is bad...
-void text_UpdateFindExecutableSections(PELoader& loader, bool patch)
-{
-  //This patch is necessary because we updated ReadPETableForSection
-  SectionInfo& info = loader.GetSectionMap().at(SectionType::TEXT);
-  //push 0
-  //push 1
-  //push edi
-  std::vector<uint32_t> offsets = Analyzer::FindSectionPattern(info,
-    "\x6A\x00\x6A\x01\x57", "xxxxx", loader.GetImageBase());
-  if (offsets.size() != 1)
-  {
-    printf("Expected to find one result for UpdateFindExecutableSections\n");
-    return;
-  }
-  printf("[.text] Found UpdateFindExecutableSections at 0x%X, patching: %s\n", offsets.at(0), sbool(patch));
-  if (!patch) return;
-  const size_t functionStart = offsets.at(0) - info.VirtualAddress - 0x18;
-  //4 = Not Used (default case, do nothing)  <- reusing this case
-  info.data[functionStart + 0x1B] = 0x04;
-  info.data[functionStart + 0x54] = 0x04;
-}
-
 void CopyDecryptedSections(PELoader& loader)
 {
-  //This will not work with the dll
+  //This will not work with the dll because there needs to be fixups
+  //for the relocations
   SectionInfo& info_txt = loader.GetSectionMap().at(SectionType::TXT);
   SectionInfo& info_txx = loader.GetSectionMap().at(SectionType::TXX);
   unsigned int size = info_txt.header.SizeOfRawData;
@@ -531,7 +509,7 @@ void CopyDecryptedSections(PELoader& loader)
 }
 
 
-bool ApplyPatches(PELoader& loader)
+bool ApplyPatches(PELoader& loader, bool isDLL)
 {
   data_StringPatch(loader, true);
   txt2_IsBeingDebuggedPatch(loader, true);
@@ -543,14 +521,16 @@ bool ApplyPatches(PELoader& loader)
   txt2_NTQueryProcessInformationPatch(loader, true);
   txt2_SecdrvVerificationPatch(loader, true);
 
-  //New Patches
-  txt_GetDriveTypeA(loader, true);
-  txt_UNK_CDROMCheck1(loader, true);
-  txt_UNK_CDROMCheck2(loader, true);
-  txt2_AddPETableSectionLookup(loader, true);
-  //We want .txt to be loaded so we can decrypt it
-  //but then we dont want it loaded when we want to hash txx
-  //text_UpdateFindExecutableSections(loader, true);
-  txt_HashExecutableSectionsType(loader, true);
+  //New Patches - only possible with decryption
+  //Currently decryption/encryption not supported
+  //with dlls
+  if (!isDLL)
+  {
+    txt_GetDriveTypeA(loader, true);
+    txt_UNK_CDROMCheck1(loader, true);
+    txt_UNK_CDROMCheck2(loader, true);
+    txt2_AddPETableSectionLookup(loader, true);
+    txt_HashExecutableSectionsType(loader, true);
+  }
   return true;
 }

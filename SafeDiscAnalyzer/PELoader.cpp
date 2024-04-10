@@ -529,27 +529,13 @@ bool PELoader::LoadPEFile(const char* filepath)
       SH[NewIndex].Characteristics = SH[i].Characteristics;
       SH[NewIndex].PointerToRawData = align(EndOfFile, OH->FileAlignment);
       
-      //Makes sections not findable in ReadPETableForSection with SectionType = 1
-      //We use this on executable code that gets duplicated, so it only finds the new one
-      //
-      const DWORD FindSectionCharacteristics = IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE;
+
+      //To detect on FindSection(4) - used for hashing, then add 0x1
+      //TODO this will not working with dll relocations/hashing
+      //Make a "disable" for dlls, eg hash with the original txt section
       if (SH[i].Characteristics & IMAGE_SCN_CNT_CODE)
       {
-        if (it_copy->second.characteristics == ORIGINAL_SECTION)
-        { //Hide original section
-          SH[i].Characteristics ^= IMAGE_SCN_CNT_CODE;
-          //SH[i].Characteristics ^= 0x01;
-          SH[NewIndex].Characteristics |= 0x01; //Reserved IMAGE_SCN_TYPE_DSECT
-          printf("Updated %s Characteristics = 0x%X\n", SH[i].Name, SH[i].Characteristics);
-          printf("Updated %s Characteristics = 0x%X\n", SH[NewIndex].Name, SH[NewIndex].Characteristics);
-        }
-        else
-        {
-          SH[NewIndex].Characteristics ^= IMAGE_SCN_CNT_CODE;
           SH[NewIndex].Characteristics |= 0x01;
-          printf("Updated %s Characteristics = 0x%X\n", SH[i].Name, SH[i].Characteristics);
-          printf("Updated %s Characteristics = 0x%X\n", SH[NewIndex].Name, SH[NewIndex].Characteristics);
-        }
       }
 
       OH->SizeOfImage = SH[NewIndex].VirtualAddress + SH[NewIndex].Misc.VirtualSize;

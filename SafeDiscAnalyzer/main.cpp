@@ -94,7 +94,7 @@ int main(int argc, const char** argv)
   if (bypass)
   {
     printf("Applying bypass patches\n");
-    if (!ApplyPatches(loader))
+    if (!ApplyPatches(loader, dll))
       return 0;
   }
 
