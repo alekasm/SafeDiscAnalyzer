@@ -1,3 +1,3 @@
 #pragma once
 
-static void DecryptString(char* out, char* in);
+void DecryptString(char* out, char* in);
